@@ -120,6 +120,13 @@
           <button style="margin-left: 1px;" class="btn" :class="wifiInfo.wifiStatus5 ? 'btn-primary' : 'btn-primary'"
                   @click="wifiStateSetHandler('wlan2',!wifiInfo.wifiStatus5)">{{wifiInfo.wifiStatus5?'关闭':'开启'}}</button>
         </div>
+
+        <div class="auto-refresh-controls">
+          QCI: {{ netAmbr.qci2 || netAmbr.qci1 }}
+          ⬇️ {{ netAmbr.dl.value }} {{ netAmbr.dl.unit }}
+          ⬆️ {{ netAmbr.ul.value }} {{ netAmbr.ul.unit }}
+        </div>
+        
       </div>
     </div>
 
@@ -1075,6 +1082,42 @@ const wifiInfo = ref<WifiInfo>({} as WifiInfo);
 const wifiModeText = computed(() => wifiInfo.value.highPerformance ? '高性能模式' : '省电模式')
 const wifiButtonText = computed(() => wifiInfo.value.highPerformance ? '切换为省电' : '切换为高性能')
 
+// WiFi状态
+interface NetAmbr {
+  raw: string;
+  dl: {
+    value:    number;
+    unit:     string;
+    unit_num: number;
+    unit_raw: string;
+  };
+  ul: {
+    value:    number;
+    unit:     string;
+    unit_num: number;
+    unit_raw: string;
+  };
+  qci1: number;
+  qci2: number;
+}
+const netAmbr = ref<NetAmbr>({
+  raw: '',
+  dl: {
+    value: 0,
+    unit: '',
+    unit_num: 0,
+    unit_raw: ''
+  },
+  ul: {
+    value: 0,
+    unit: '',
+    unit_num: 0,
+    unit_raw: ''
+  },
+  qci1: 0,
+  qci2: 0
+});
+
 // 响应式数据
 const loading = ref(false);
 const error = ref<string | null>(null);
@@ -1839,6 +1882,19 @@ function smsForwardHandler() {
   });
 }
 
+function netAmbrGetHandler() {
+  axios.post('/api/net/ambr/get', { })
+    .then((res) => {
+      if (res.data.code !== 0) return;
+      const data = res.data.data;
+      netAmbr.value = {
+        ...netAmbr.value,
+        ...data,
+        dl: { ...netAmbr.value.dl, ...data.dl },
+        ul: { ...netAmbr.value.ul, ...data.ul },
+      };
+    })
+}
 function psmGetHandler() {
   axios.post('/api/wifi/psm/get', { ifaces: ['wlan0', 'wlan1', 'wlan2', 'wlan3'], })
     .then((res) => {
@@ -1886,6 +1942,8 @@ onMounted(() => {
   }
   // 获取WiFi状态
   psmGetHandler();
+  // 获取签约速率
+  netAmbrGetHandler();
 });
 
 onUnmounted(() => {

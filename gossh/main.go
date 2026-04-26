@@ -86,6 +86,7 @@ func main() {
 		auth.POST("/api/wifi/psm/get", service.WifiPsmGetHandler)
 		auth.POST("/api/wifi/psm/set", service.WifiPsmSetHandler)
 		auth.POST("/api/wifi/state/set", service.WifiStateSetHandler)
+		auth.POST("/api/net/ambr/get", service.NetAmbrGetHandler)
 	}
 
 	{ // SSH 连接配置

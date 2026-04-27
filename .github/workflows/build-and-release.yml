@@ -1,104 +1,76 @@
-name: Build & Release
+name: Build WebSSH
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [ "master" ]
 
 jobs:
-  build-release:
+  build:
     runs-on: ubuntu-latest
-    name: Build and Release for Multiple OS & Arch
-    permissions:
-      contents: write
-    
-    strategy:
-      matrix:
-        include:
-          # Windows targets (64-bit only)
-          - os: windows
-            goos: windows
-            arch: amd64
-            suffix: .exe
-          - os: windows
-            goos: windows
-            arch: arm64
-            suffix: .exe
-          
-          # Linux targets (64-bit architectures)
-          - os: linux
-            goos: linux
-            arch: amd64
-            suffix: ''
-          - os: linux
-            goos: linux
-            arch: arm64
-            suffix: ''
-          
-          # macOS targets (64-bit only)
-          - os: macos
-            goos: darwin
-            arch: amd64
-            suffix: ''
-          - os: macos
-            goos: darwin
-            arch: arm64
-            suffix: ''
 
     steps:
-      - name: Checkout code
+      # 1. 拉代码
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Go
+      # 2. 安装 Node
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # 3. 安装 pnpm
+      - name: Install pnpm
+        run: npm install -g pnpm
+
+      # 4. 前端构建（webssh）
+      - name: Build webssh
+        run: |
+          cd webssh
+          pnpm install
+          npm run buildOnly
+
+      # 5. 清空 gossh/webroot 并复制 dist
+      - name: Prepare webroot
+        run: |
+          rm -rf gossh/webroot/*
+          cp -r webssh/dist/* gossh/webroot/
+
+      # 6. 安装 Go
+      - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24.5'
+          go-version: '1.22'
 
-      - name: Prepare workspace
+      # 7. 构建 Go
+      - name: Build Go binary
         run: |
-          echo "📂 Workspace structure:"
-          ls -la
-          
-          echo "📂 gossh directory content:"
-          ls -la gossh
-          
-          # 确保目录存在
-          if [ ! -d "gossh" ]; then
-            echo "❌ Error: gossh directory not found!"
-            exit 1
-          fi
-          
-          # 进入gossh目录准备构建
           cd gossh
-          
-          # 更新依赖
+
+          export CGO_ENABLED=0
+          export GOOS=linux
+          export GOARCH=arm64
+
+          go env -w GOPROXY=https://goproxy.cn,direct
           go mod tidy
-          go mod download
 
-      - name: Build for ${{ matrix.os }} (${{ matrix.arch }})
+          BUILD_TIME=$(date +%Y%m%d_%H%M%S)
+
+          go build -trimpath -ldflags="-s -w" -o webssh_${BUILD_TIME}
+
+      # 8. 安装 UPX
+      - name: Install UPX
+        run: sudo apt-get install -y upx-ucl
+
+      # 9. 压缩二进制
+      - name: Compress binary
         run: |
           cd gossh
-          
-          # 静态编译
-          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.arch }} \
-            go build -trimpath -ldflags="-s -w" -o GoWebSSH${{ matrix.suffix }}
-          
-          # 验证构建结果
-          if [ -f "GoWebSSH${{ matrix.suffix }}" ]; then
-            echo "✅ Build successful! Output file: GoWebSSH${{ matrix.suffix }}"
-          else
-            echo "❌ Build failed! No output file found in: $(pwd)"
-            ls -la
-            exit 1
-          fi
-          
-          # 创建压缩包（在仓库根目录）
-          zip -j ../GoWebSSH-${{ matrix.os }}-${{ matrix.arch }}.zip GoWebSSH${{ matrix.suffix }}
+          upx --best --lzma webssh_*
 
-      - name: Create Release and Upload Assets
-        uses: softprops/action-gh-release@v2
+      # 10. 上传产物
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.ref_name }}
-          tag_name: ${{ github.ref_name }}
-          files: |
-            GoWebSSH-*.zip
+          name: webssh-build
+          path: gossh/webssh_*

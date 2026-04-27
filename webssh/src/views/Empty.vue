@@ -332,62 +332,130 @@
           <div class="signal-grid">
             <div class="signal-item">
               <div class="signal-label-row">
-                <span class="label">RSRP</span>
-                <span :class="['signal-status', getSignalStatus('rsrp', d.nr5g_rsrp).className]">
-                  {{ getSignalStatus('rsrp', d.nr5g_rsrp).text }}
+                <span class="signal-label-help">
+                  <span class="label">RSRP</span>
+                  <button
+                    type="button"
+                    class="signal-help-trigger"
+                    :aria-expanded="isSignalHelpOpen('nr', 'rsrp')"
+                    @click="toggleSignalHelp('nr', 'rsrp')">*</button>
+                </span>
+                <span :class="['signal-status', getSignalDisplayStatus('nr', 'rsrp', d.nr5g_rsrp).className]">
+                  {{ getSignalDisplayStatus('nr', 'rsrp', d.nr5g_rsrp).text }}
                 </span>
               </div>
               <div class="progress-bar">
                 <div
                   class="progress-fill"
-                  :class="getSignalStatus('rsrp', d.nr5g_rsrp).className"
+                  :class="getSignalDisplayStatus('nr', 'rsrp', d.nr5g_rsrp).className"
                   :style="{ width: getRsrpPercent(d.nr5g_rsrp) + '%' }"></div>
                 <span class="progress-text">{{ formatDbm(d.nr5g_rsrp) }}</span>
               </div>
+              <div v-if="isSignalHelpOpen('nr', 'rsrp')" class="signal-help-panel">
+                <div class="signal-help-title">{{ signalHelpMap.rsrp.title }}</div>
+                <div class="signal-help-desc">{{ signalHelpMap.rsrp.description }}</div>
+                <div class="signal-help-ranges">
+                  <div v-for="item in signalHelpMap.rsrp.ranges" :key="item.label">
+                    <span :class="['signal-help-dot', item.className]"></span>
+                    <span>{{ item.label }}</span>
+                  </div>
+                </div>
+              </div>
             </div>
             <div class="signal-item">
               <div class="signal-label-row">
-                <span class="label">RSRQ</span>
-                <span :class="['signal-status', getSignalStatus('rsrq', d.nr5g_rsrq).className]">
-                  {{ getSignalStatus('rsrq', d.nr5g_rsrq).text }}
+                <span class="signal-label-help">
+                  <span class="label">RSRQ</span>
+                  <button
+                    type="button"
+                    class="signal-help-trigger"
+                    :aria-expanded="isSignalHelpOpen('nr', 'rsrq')"
+                    @click="toggleSignalHelp('nr', 'rsrq')">*</button>
+                </span>
+                <span :class="['signal-status', getSignalDisplayStatus('nr', 'rsrq', d.nr5g_rsrq).className]">
+                  {{ getSignalDisplayStatus('nr', 'rsrq', d.nr5g_rsrq).text }}
                 </span>
               </div>
               <div class="progress-bar">
                 <div
                   class="progress-fill"
-                  :class="getSignalStatus('rsrq', d.nr5g_rsrq).className"
+                  :class="getSignalDisplayStatus('nr', 'rsrq', d.nr5g_rsrq).className"
                   :style="{ width: getRsrqPercent(d.nr5g_rsrq) + '%' }"></div>
                 <span class="progress-text">{{ formatDb(d.nr5g_rsrq) }}</span>
               </div>
+              <div v-if="isSignalHelpOpen('nr', 'rsrq')" class="signal-help-panel">
+                <div class="signal-help-title">{{ signalHelpMap.rsrq.title }}</div>
+                <div class="signal-help-desc">{{ signalHelpMap.rsrq.description }}</div>
+                <div class="signal-help-ranges">
+                  <div v-for="item in signalHelpMap.rsrq.ranges" :key="item.label">
+                    <span :class="['signal-help-dot', item.className]"></span>
+                    <span>{{ item.label }}</span>
+                  </div>
+                </div>
+              </div>
             </div>
             <div class="signal-item">
               <div class="signal-label-row">
-                <span class="label">SINR</span>
-                <span :class="['signal-status', getSignalStatus('sinr', d.nr5g_snr).className]">
-                  {{ getSignalStatus('sinr', d.nr5g_snr).text }}
+                <span class="signal-label-help">
+                  <span class="label">SINR</span>
+                  <button
+                    type="button"
+                    class="signal-help-trigger"
+                    :aria-expanded="isSignalHelpOpen('nr', 'sinr')"
+                    @click="toggleSignalHelp('nr', 'sinr')">*</button>
+                </span>
+                <span :class="['signal-status', getSignalDisplayStatus('nr', 'sinr', d.nr5g_snr).className]">
+                  {{ getSignalDisplayStatus('nr', 'sinr', d.nr5g_snr).text }}
                 </span>
               </div>
               <div class="progress-bar">
                 <div
                   class="progress-fill"
-                  :class="getSignalStatus('sinr', d.nr5g_snr).className"
+                  :class="getSignalDisplayStatus('nr', 'sinr', d.nr5g_snr).className"
                   :style="{ width: getSnrPercent(d.nr5g_snr) + '%' }"></div>
                 <span class="progress-text">{{ formatSnr(d.nr5g_snr) }}</span>
               </div>
+              <div v-if="isSignalHelpOpen('nr', 'sinr')" class="signal-help-panel">
+                <div class="signal-help-title">{{ signalHelpMap.sinr.title }}</div>
+                <div class="signal-help-desc">{{ signalHelpMap.sinr.description }}</div>
+                <div class="signal-help-ranges">
+                  <div v-for="item in signalHelpMap.sinr.ranges" :key="item.label">
+                    <span :class="['signal-help-dot', item.className]"></span>
+                    <span>{{ item.label }}</span>
+                  </div>
+                </div>
+              </div>
             </div>
             <div class="signal-item">
               <div class="signal-label-row">
-                <span class="label">RSSI</span>
-                <span :class="['signal-status', getSignalStatus('rssi', d.nr5g_rssi).className]">
-                  {{ getSignalStatus('rssi', d.nr5g_rssi).text }}
+                <span class="signal-label-help">
+                  <span class="label">RSSI</span>
+                  <button
+                    type="button"
+                    class="signal-help-trigger"
+                    :aria-expanded="isSignalHelpOpen('nr', 'rssi')"
+                    @click="toggleSignalHelp('nr', 'rssi')">*</button>
+                </span>
+                <span :class="['signal-status', getSignalDisplayStatus('nr', 'rssi', d.nr5g_rssi).className]">
+                  {{ getSignalDisplayStatus('nr', 'rssi', d.nr5g_rssi).text }}
                 </span>
               </div>
               <div class="progress-bar">
                 <div
                   class="progress-fill"
-                  :class="getSignalStatus('rssi', d.nr5g_rssi).className"
+                  :class="getSignalDisplayStatus('nr', 'rssi', d.nr5g_rssi).className"
                   :style="{ width: getRssiPercent(d.nr5g_rssi) + '%' }"></div>
                 <span class="progress-text">{{ formatDbm(d.nr5g_rssi) }}</span>
+              </div>
+              <div v-if="isSignalHelpOpen('nr', 'rssi')" class="signal-help-panel">
+                <div class="signal-help-title">{{ signalHelpMap.rssi.title }}</div>
+                <div class="signal-help-desc">{{ signalHelpMap.rssi.description }}</div>
+                <div class="signal-help-ranges">
+                  <div v-for="item in signalHelpMap.rssi.ranges" :key="item.label">
+                    <span :class="['signal-help-dot', item.className]"></span>
+                    <span>{{ item.label }}</span>
+                  </div>
+                </div>
               </div>
             </div>
             <div class="signal-item">
@@ -422,62 +490,130 @@
 
             <div class="signal-item">
               <div class="signal-label-row">
-                <span class="label">RSRP</span>
-                <span :class="['signal-status', getSignalStatus('rsrp', d.lte_rsrp).className]">
-                  {{ getSignalStatus('rsrp', d.lte_rsrp).text }}
+                <span class="signal-label-help">
+                  <span class="label">RSRP</span>
+                  <button
+                    type="button"
+                    class="signal-help-trigger"
+                    :aria-expanded="isSignalHelpOpen('lte', 'rsrp')"
+                    @click="toggleSignalHelp('lte', 'rsrp')">*</button>
+                </span>
+                <span :class="['signal-status', getSignalDisplayStatus('lte', 'rsrp', d.lte_rsrp).className]">
+                  {{ getSignalDisplayStatus('lte', 'rsrp', d.lte_rsrp).text }}
                 </span>
               </div>
               <div class="progress-bar">
                 <div
                   class="progress-fill"
-                  :class="getSignalStatus('rsrp', d.lte_rsrp).className"
+                  :class="getSignalDisplayStatus('lte', 'rsrp', d.lte_rsrp).className"
                   :style="{ width: getRsrpPercent(d.lte_rsrp) + '%' }"></div>
                 <span class="progress-text">{{ formatDbm(d.lte_rsrp) }}</span>
               </div>
+              <div v-if="isSignalHelpOpen('lte', 'rsrp')" class="signal-help-panel">
+                <div class="signal-help-title">{{ signalHelpMap.rsrp.title }}</div>
+                <div class="signal-help-desc">{{ signalHelpMap.rsrp.description }}</div>
+                <div class="signal-help-ranges">
+                  <div v-for="item in signalHelpMap.rsrp.ranges" :key="item.label">
+                    <span :class="['signal-help-dot', item.className]"></span>
+                    <span>{{ item.label }}</span>
+                  </div>
+                </div>
+              </div>
             </div>
             <div class="signal-item">
               <div class="signal-label-row">
-                <span class="label">RSRQ</span>
-                <span :class="['signal-status', getSignalStatus('rsrq', d.lte_rsrq).className]">
-                  {{ getSignalStatus('rsrq', d.lte_rsrq).text }}
+                <span class="signal-label-help">
+                  <span class="label">RSRQ</span>
+                  <button
+                    type="button"
+                    class="signal-help-trigger"
+                    :aria-expanded="isSignalHelpOpen('lte', 'rsrq')"
+                    @click="toggleSignalHelp('lte', 'rsrq')">*</button>
+                </span>
+                <span :class="['signal-status', getSignalDisplayStatus('lte', 'rsrq', d.lte_rsrq).className]">
+                  {{ getSignalDisplayStatus('lte', 'rsrq', d.lte_rsrq).text }}
                 </span>
               </div>
               <div class="progress-bar">
                 <div
                   class="progress-fill"
-                  :class="getSignalStatus('rsrq', d.lte_rsrq).className"
+                  :class="getSignalDisplayStatus('lte', 'rsrq', d.lte_rsrq).className"
                   :style="{ width: getRsrqPercent(d.lte_rsrq) + '%' }"></div>
                 <span class="progress-text">{{ formatDb(d.lte_rsrq) }}</span>
               </div>
+              <div v-if="isSignalHelpOpen('lte', 'rsrq')" class="signal-help-panel">
+                <div class="signal-help-title">{{ signalHelpMap.rsrq.title }}</div>
+                <div class="signal-help-desc">{{ signalHelpMap.rsrq.description }}</div>
+                <div class="signal-help-ranges">
+                  <div v-for="item in signalHelpMap.rsrq.ranges" :key="item.label">
+                    <span :class="['signal-help-dot', item.className]"></span>
+                    <span>{{ item.label }}</span>
+                  </div>
+                </div>
+              </div>
             </div>
             <div class="signal-item">
               <div class="signal-label-row">
-                <span class="label">SINR</span>
-                <span :class="['signal-status', getSignalStatus('sinr', d.lte_snr).className]">
-                  {{ getSignalStatus('sinr', d.lte_snr).text }}
+                <span class="signal-label-help">
+                  <span class="label">SINR</span>
+                  <button
+                    type="button"
+                    class="signal-help-trigger"
+                    :aria-expanded="isSignalHelpOpen('lte', 'sinr')"
+                    @click="toggleSignalHelp('lte', 'sinr')">*</button>
+                </span>
+                <span :class="['signal-status', getSignalDisplayStatus('lte', 'sinr', d.lte_snr).className]">
+                  {{ getSignalDisplayStatus('lte', 'sinr', d.lte_snr).text }}
                 </span>
               </div>
               <div class="progress-bar">
                 <div
                   class="progress-fill"
-                  :class="getSignalStatus('sinr', d.lte_snr).className"
+                  :class="getSignalDisplayStatus('lte', 'sinr', d.lte_snr).className"
                   :style="{ width: getSnrPercent(d.lte_snr) + '%' }"></div>
                 <span class="progress-text">{{ formatSnr(d.lte_snr) }}</span>
               </div>
+              <div v-if="isSignalHelpOpen('lte', 'sinr')" class="signal-help-panel">
+                <div class="signal-help-title">{{ signalHelpMap.sinr.title }}</div>
+                <div class="signal-help-desc">{{ signalHelpMap.sinr.description }}</div>
+                <div class="signal-help-ranges">
+                  <div v-for="item in signalHelpMap.sinr.ranges" :key="item.label">
+                    <span :class="['signal-help-dot', item.className]"></span>
+                    <span>{{ item.label }}</span>
+                  </div>
+                </div>
+              </div>
             </div>
             <div class="signal-item">
               <div class="signal-label-row">
-                <span class="label">RSSI</span>
-                <span :class="['signal-status', getSignalStatus('rssi', d.lte_rssi).className]">
-                  {{ getSignalStatus('rssi', d.lte_rssi).text }}
+                <span class="signal-label-help">
+                  <span class="label">RSSI</span>
+                  <button
+                    type="button"
+                    class="signal-help-trigger"
+                    :aria-expanded="isSignalHelpOpen('lte', 'rssi')"
+                    @click="toggleSignalHelp('lte', 'rssi')">*</button>
+                </span>
+                <span :class="['signal-status', getSignalDisplayStatus('lte', 'rssi', d.lte_rssi).className]">
+                  {{ getSignalDisplayStatus('lte', 'rssi', d.lte_rssi).text }}
                 </span>
               </div>
               <div class="progress-bar">
                 <div
                   class="progress-fill"
-                  :class="getSignalStatus('rssi', d.lte_rssi).className"
+                  :class="getSignalDisplayStatus('lte', 'rssi', d.lte_rssi).className"
                   :style="{ width: getRssiPercent(d.lte_rssi) + '%' }"></div>
                 <span class="progress-text">{{ formatDbm(d.lte_rssi) }}</span>
+              </div>
+              <div v-if="isSignalHelpOpen('lte', 'rssi')" class="signal-help-panel">
+                <div class="signal-help-title">{{ signalHelpMap.rssi.title }}</div>
+                <div class="signal-help-desc">{{ signalHelpMap.rssi.description }}</div>
+                <div class="signal-help-ranges">
+                  <div v-for="item in signalHelpMap.rssi.ranges" :key="item.label">
+                    <span :class="['signal-help-dot', item.className]"></span>
+                    <span>{{ item.label }}</span>
+                  </div>
+                </div>
               </div>
             </div>
             <div class="signal-item">
@@ -1700,11 +1836,24 @@ function getSnrPercent(snr: number): number {
 
 type SignalMetric = 'rsrp' | 'rsrq' | 'sinr' | 'rssi';
 type SignalGrade = 'excellent' | 'good' | 'fair' | 'poor' | 'unknown';
+type SignalType = 'nr' | 'lte';
+type SignalHelpKey = `${SignalType}-${SignalMetric}`;
 
 interface SignalStatus {
   text: string;
   className: SignalGrade;
   score: number;
+}
+
+interface SignalHelpRange {
+  label: string;
+  className: SignalGrade;
+}
+
+interface SignalHelp {
+  title: string;
+  description: string;
+  ranges: SignalHelpRange[];
 }
 
 const signalStatusMap: Record<SignalGrade, SignalStatus> = {
@@ -1715,6 +1864,64 @@ const signalStatusMap: Record<SignalGrade, SignalStatus> = {
   unknown: { text: '未知', className: 'unknown', score: 0 },
 };
 
+const signalHelpMap: Record<SignalMetric, SignalHelp> = {
+  rsrp: {
+    title: 'RSRP：信号覆盖强度',
+    description: '主要看基站信号到设备这里有多强。数值是负数，越接近 0 越好。',
+    ranges: [
+      { label: '≥ -85 dBm：优秀', className: 'excellent' },
+      { label: '-95 到 -86 dBm：良好', className: 'good' },
+      { label: '-105 到 -96 dBm：一般', className: 'fair' },
+      { label: '< -105 dBm：较差', className: 'poor' },
+    ],
+  },
+  rsrq: {
+    title: 'RSRQ：信号质量',
+    description: '主要看信号是否干净、是否拥挤。数值也是负数，越接近 0 越好。',
+    ranges: [
+      { label: '≥ -8 dB：优秀', className: 'excellent' },
+      { label: '-11 到 -9 dB：良好', className: 'good' },
+      { label: '-15 到 -12 dB：一般', className: 'fair' },
+      { label: '< -15 dB：较差', className: 'poor' },
+    ],
+  },
+  sinr: {
+    title: 'SINR：信噪比',
+    description: '主要看有用信号比干扰和噪声强多少。数值越大越好。',
+    ranges: [
+      { label: '≥ 20 dB：优秀', className: 'excellent' },
+      { label: '13 到 19.9 dB：良好', className: 'good' },
+      { label: '> 0 到 12.9 dB：一般', className: 'fair' },
+      { label: '≤ 0 dB：较差', className: 'poor' },
+    ],
+  },
+  rssi: {
+    title: 'RSSI：接收总强度',
+    description: '包含有用信号、干扰和噪声，只适合作辅助参考。数值越接近 0 越好。',
+    ranges: [
+      { label: '≥ -65 dBm：优秀', className: 'excellent' },
+      { label: '-75 到 -66 dBm：良好', className: 'good' },
+      { label: '-85 到 -76 dBm：一般', className: 'fair' },
+      { label: '< -85 dBm：较差', className: 'poor' },
+    ],
+  },
+};
+
+const openedSignalHelp = ref<SignalHelpKey | null>(null);
+
+function getSignalHelpKey(type: SignalType, metric: SignalMetric): SignalHelpKey {
+  return `${type}-${metric}`;
+}
+
+function isSignalHelpOpen(type: SignalType, metric: SignalMetric): boolean {
+  return openedSignalHelp.value === getSignalHelpKey(type, metric);
+}
+
+function toggleSignalHelp(type: SignalType, metric: SignalMetric) {
+  const key = getSignalHelpKey(type, metric);
+  openedSignalHelp.value = openedSignalHelp.value === key ? null : key;
+}
+
 function getSignalStatus(metric: SignalMetric, rawValue: unknown): SignalStatus {
   if (rawValue === null || rawValue === undefined || rawValue === '') {
     return signalStatusMap.unknown;
@@ -1723,6 +1930,7 @@ function getSignalStatus(metric: SignalMetric, rawValue: unknown): SignalStatus 
   if (!Number.isFinite(value)) return signalStatusMap.unknown;
 
   if (metric === 'rsrp') {
+    if (value === 0) return signalStatusMap.unknown;
     if (value >= -85) return signalStatusMap.excellent;
     if (value >= -95) return signalStatusMap.good;
     if (value >= -105) return signalStatusMap.fair;
@@ -1730,6 +1938,7 @@ function getSignalStatus(metric: SignalMetric, rawValue: unknown): SignalStatus 
   }
 
   if (metric === 'rsrq') {
+    if (value === 0) return signalStatusMap.unknown;
     if (value >= -8) return signalStatusMap.excellent;
     if (value >= -11) return signalStatusMap.good;
     if (value >= -15) return signalStatusMap.fair;
@@ -1739,14 +1948,39 @@ function getSignalStatus(metric: SignalMetric, rawValue: unknown): SignalStatus 
   if (metric === 'sinr') {
     if (value >= 20) return signalStatusMap.excellent;
     if (value >= 13) return signalStatusMap.good;
-    if (value >= 0) return signalStatusMap.fair;
+    if (value > 0) return signalStatusMap.fair;
     return signalStatusMap.poor;
   }
 
+  if (value === 0) return signalStatusMap.unknown;
   if (value >= -65) return signalStatusMap.excellent;
   if (value >= -75) return signalStatusMap.good;
   if (value >= -85) return signalStatusMap.fair;
   return signalStatusMap.poor;
+}
+
+function hasUsableSignalValue(rawValue: unknown): boolean {
+  if (rawValue === null || rawValue === undefined || rawValue === '') {
+    return false;
+  }
+  const value = Number(rawValue);
+  return Number.isFinite(value) && value !== 0;
+}
+
+function isSignalActive(type: 'nr' | 'lte'): boolean {
+  if (type === 'nr') {
+    return networkType.value === '5G' && hasUsableSignalValue(d.value.nr5g_rsrp);
+  }
+  return networkType.value === '4G' && hasUsableSignalValue(d.value.lte_rsrp);
+}
+
+function getSignalDisplayStatus(
+  type: 'nr' | 'lte',
+  metric: SignalMetric,
+  rawValue: unknown
+): SignalStatus {
+  if (!isSignalActive(type)) return signalStatusMap.unknown;
+  return getSignalStatus(metric, rawValue);
 }
 
 function getAverageSignalStatus(statuses: SignalStatus[]): SignalStatus {
@@ -1757,13 +1991,30 @@ function getAverageSignalStatus(statuses: SignalStatus[]): SignalStatus {
     validStatuses.reduce((total, item) => total + item.score, 0) /
     validStatuses.length;
 
-  if (averageScore >= 3.5) return signalStatusMap.excellent;
-  if (averageScore >= 2.5) return signalStatusMap.good;
-  if (averageScore >= 1.5) return signalStatusMap.fair;
-  return signalStatusMap.poor;
+  let status: SignalStatus;
+  if (averageScore >= 3.5) {
+    status = signalStatusMap.excellent;
+  } else if (averageScore >= 2.5) {
+    status = signalStatusMap.good;
+  } else if (averageScore >= 1.5) {
+    status = signalStatusMap.fair;
+  } else {
+    status = signalStatusMap.poor;
+  }
+
+  const weakestScore = Math.min(...validStatuses.map(item => item.score));
+  if (weakestScore <= 1 && status.score > signalStatusMap.fair.score) {
+    return signalStatusMap.fair;
+  }
+  if (weakestScore <= 2 && status.score > signalStatusMap.good.score) {
+    return signalStatusMap.good;
+  }
+  return status;
 }
 
 function getNetworkSignalStatus(type: 'nr' | 'lte'): SignalStatus {
+  if (!isSignalActive(type)) return signalStatusMap.unknown;
+
   if (type === 'nr') {
     return getAverageSignalStatus([
       getSignalStatus('rsrp', d.value.nr5g_rsrp),
@@ -2670,6 +2921,91 @@ onUnmounted(() => {
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
+}
+
+.signal-label-help {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.signal-help-trigger {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid rgba(125, 211, 252, 0.45);
+  border-radius: 50%;
+  background: rgba(56, 189, 248, 0.12);
+  color: #7dd3fc;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 18px;
+  text-align: center;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.signal-help-trigger:hover,
+.signal-help-trigger[aria-expanded='true'] {
+  background: rgba(56, 189, 248, 0.24);
+  border-color: rgba(125, 211, 252, 0.7);
+  color: #dff6ff;
+}
+
+.signal-help-panel {
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.72);
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.signal-help-title {
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.signal-help-desc {
+  margin-top: 4px;
+}
+
+.signal-help-ranges {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.signal-help-ranges div {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.signal-help-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.signal-help-dot.excellent {
+  background: #68d391;
+}
+
+.signal-help-dot.good {
+  background: #38bdf8;
+}
+
+.signal-help-dot.fair {
+  background: #f6ad55;
+}
+
+.signal-help-dot.poor {
+  background: #fc8181;
 }
 
 .signal-status {

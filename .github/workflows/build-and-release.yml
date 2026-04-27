@@ -43,6 +43,7 @@ jobs:
       - name: Prepare webroot
         run: |
           rm -rf gossh/webroot/*
+          mkdir -p gossh/webroot
           cp -r webssh/dist/* gossh/webroot/
 
       # 6. Go 环境
@@ -51,7 +52,7 @@ jobs:
         with:
           go-version: '1.22'
 
-      # 7. 构建 Go（带版本号）
+      # 7. 构建 Go（二进制 + 内嵌版本）
       - name: Build Go binary
         run: |
           cd gossh
@@ -65,7 +66,7 @@ jobs:
 
           go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o webssh_${VERSION}
 
-      # 8. 安装 UPX（可选）
+      # 8. UPX 压缩（可选）
       - name: Install UPX
         run: sudo apt-get install -y upx-ucl
 
@@ -74,20 +75,21 @@ jobs:
           cd gossh
           upx --best --lzma webssh_${VERSION} || true
 
-      # 9. 打包
-      - name: Package
+      # 9. 生成 version 文件（推荐）
+      - name: Generate version file
         run: |
-          mkdir release
-          cp gossh/webssh_${VERSION} release/
-          cd release
-          tar -czf webssh_${VERSION}.tar.gz webssh_${VERSION}
+          echo "${VERSION}" > version.txt
 
-      # 10. 创建 Release
+      # 10. 创建 Release（直接上传原始文件）
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: v${{ steps.version.outputs.version }}
-          name: Release v${{ steps.version.outputs.version }}
-          files: release/webssh_${{ steps.version.outputs.version }}.tar.gz
+          name: v${{ steps.version.outputs.version }}
+          draft: false
+          prerelease: false
+          files: |
+            gossh/webssh_${{ steps.version.outputs.version }}
+            version.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

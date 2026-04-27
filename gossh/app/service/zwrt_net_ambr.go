@@ -5,11 +5,14 @@ import (
 	"os/exec"
 	"strings"
 	"gossh/gin"
+	"regexp"
+	"strconv"
 )
 
 // 核心 导出函数 (Go 规则:首字母大写 = 可导出(public), 首字母小写只能当前package用)
 func NetAmbrGetHandler(c *gin.Context) {
-	line, err := getLatestAmbr()
+	// 1.1 获取 ambr
+	raw_ambr, err := getLatestAmbr()
 	if err != nil {
 		c.JSON(200, gin.H{
 			"code": 1,
@@ -17,14 +20,16 @@ func NetAmbrGetHandler(c *gin.Context) {
 		})
 		return
 	}
-
-	dl, ul, dlUnitRaw, dlUnitNum, ulUnitRaw, ulUnitNum := parseAmbr(line)
-	qci1, qci2 := getLatestQci()
+	// 1.2 解析 ambr
+	dl, ul, dlUnitRaw, dlUnitNum, ulUnitRaw, ulUnitNum := parseAmbr(raw_ambr)
+	// 2.1 获取 qci
+	raw_qci, err := getLatestQci()
+	// 2.2 解析 qci
+	qci1, qci2 := parseQci(raw_qci)
 
 	c.JSON(200, gin.H{
 		"code": 0,
 		"data": gin.H{
-			"raw":     line,
 			"dl": gin.H{
 				"value":    dl,
 				"unit":     "Mbps",
@@ -39,11 +44,13 @@ func NetAmbrGetHandler(c *gin.Context) {
 			},
 			"qci1": qci1,
 			"qci2": qci2,
+			"raw_ambr":   raw_ambr,
+			"raw_qci":    raw_qci,
 		},
 	})
 }
 
-// 获取最新ambr
+// 1.1 获取最新ambr
 func getLatestAmbr() (string, error) {
 	cmd := exec.Command("sh", "-c", `grep "dnn=.*session_ambr" /data/logfs/key.log 2>/dev/null | grep -v "dnn=ims" | tail -n 1`)
 	out, err := cmd.CombinedOutput()
@@ -53,7 +60,7 @@ func getLatestAmbr() (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// AMBR 解析增强（重点）
+// 1.2 AMBR 解析增强（重点）
 func parseAmbr(line string) (float64, float64, string, int, string, int) {
 	dlVal := extractInt(line, "session_ambr_dl")
 	dlUnitNum := extractInt(line, "session_ambr_dl_unit")
@@ -67,6 +74,35 @@ func parseAmbr(line string) (float64, float64, string, int, string, int) {
 	ul := convertToMbps(ulVal, ulUnitNum, ulUnitRaw)
 
 	return dl, ul, dlUnitRaw, dlUnitNum, ulUnitRaw, ulUnitNum
+}
+
+// 2.1 获取最新qci
+func getLatestQci() (string, error) {
+	cmd := exec.Command("sh", "-c", `grep -hEi "qci|5qi" /data/logfs/key.log 2>/dev/null | tail -n 1`)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("get ambr error: %s", string(out))
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// 2.2 QCI 获取（支持两个值）
+func parseQci(line string) (int, int) {
+	// 👉 找 qci 或 5qi 位置
+	idx := strings.Index(strings.ToLower(line), "qci")
+	if idx == -1 {
+		idx = strings.Index(strings.ToLower(line), "5qi")
+	}
+	if idx == -1 {
+		return 0, 0
+	}
+	sub := line[idx:]
+	// 👉 提取数字
+	nums := extractAllNumbers(sub)
+	if len(nums) >= 2 {
+		return nums[0], nums[1]
+	}
+	return 0, 0
 }
 
 // 数值提取(单位仅取数值)
@@ -99,22 +135,21 @@ func extractUnitFull(line, key string) string {
 
 // 单位转换优化（去掉旧逻辑坑）
 func convertToMbps(val int, unit int, unitRaw string) float64 {
+	if unitRaw != "" {
+		// 取单位括号里的单位值 添加单位转换 统一返回 Mbps
+		rate := extractUnitValue(unitRaw)
+		if rate > 0 {
+			return float64(val) * rate
+		}
+	}
+
 	switch unit {
-	case 3:
-		return float64(val*16) / 1000
-	case 4:
-		return float64(val*64) / 1000
-	case 6:
-		return float64(val)
-	}
-	// fallback：解析括号
-	if strings.Contains(unitRaw, "Mbps") {
-		num := extractNumber(unitRaw)
-		return float64(val * num)
-	}
-	if strings.Contains(unitRaw, "Kbps") {
-		num := extractNumber(unitRaw)
-		return float64(val*num) / 1000
+		case 3:
+			return float64(val*16) / 1000
+		case 4:
+			return float64(val*64) / 1000
+		case 6:
+			return float64(val)
 	}
 	return 0
 }
@@ -135,6 +170,26 @@ func extractUnitString(line, key string) string {
 	return ""
 }
 
+// 取单位括号里的单位值 添加单位转换 统一返回 Mbps
+func extractUnitValue(unitRaw string) float64 {
+	re := regexp.MustCompile(`\(([\d.]+)([KMG]?bps)\)`)
+	matches := re.FindStringSubmatch(unitRaw)
+	if len(matches) < 3 {
+		return 0
+	}
+	val, _ := strconv.ParseFloat(matches[1], 64)
+	unit := matches[2]
+	switch unit {
+		case "Mbps":
+			return val
+		case "Kbps":
+			return val / 1000
+		case "Gbps":
+			return val * 1000
+	}
+	return 0
+}
+
 // 通用数字提取
 func extractNumber(s string) int {
 	var num int
@@ -152,29 +207,4 @@ func extractAllNumbers(s string) []int {
 		}
 	}
 	return nums
-}
-
-// QCI 获取（支持两个值）
-func getLatestQci() (int, int) {
-	cmd := exec.Command("sh", "-c", `grep -hEi "qci|5qi" /data/logfs/key.log 2>/dev/null | tail -n 1`)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return 0, 0
-	}
-	line := string(out)
-	// 👉 找 qci 或 5qi 位置
-	idx := strings.Index(strings.ToLower(line), "qci")
-	if idx == -1 {
-		idx = strings.Index(strings.ToLower(line), "5qi")
-	}
-	if idx == -1 {
-		return 0, 0
-	}
-	sub := line[idx:]
-	// 👉 提取数字
-	nums := extractAllNumbers(sub)
-	if len(nums) >= 2 {
-		return nums[0], nums[1]
-	}
-	return 0, 0
 }

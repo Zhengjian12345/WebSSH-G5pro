@@ -49,6 +49,10 @@ func StartWithAttrs(c *exec.Cmd, sz *Winsize, attrs *syscall.SysProcAttr) (Pty, 
 			return nil, err
 		}
 	}
+	if err := setsane(tty); err != nil {
+		_ = pty.Close()
+		return nil, err
+	}
 	if c.Stdout == nil {
 		c.Stdout = tty
 	}
@@ -64,6 +68,9 @@ func StartWithAttrs(c *exec.Cmd, sz *Winsize, attrs *syscall.SysProcAttr) (Pty, 
 	if err := c.Start(); err != nil {
 		_ = pty.Close()
 		return nil, err
+	}
+	if c.Process != nil {
+		_ = setForegroundPgrp(pty, c.Process.Pid)
 	}
 	return pty, err
 }

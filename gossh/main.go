@@ -651,8 +651,15 @@ func main() {
 	engine.Use(middleware.DbCheck(), middleware.NetFilter())
 	engine.GET("/web_base_dir", func(c *gin.Context) { c.JSON(200, gin.H{"code": 0, "web_base_dir": config.DefaultConfig.WebBaseDir}) })
 
+	appPath := config.DefaultConfig.WebBaseDir + "/app/"
+	engine.GET(config.DefaultConfig.WebBaseDir+"/", func(c *gin.Context) {
+		c.Redirect(http.StatusMovedPermanently, appPath)
+	})
+	engine.GET(config.DefaultConfig.WebBaseDir+"/app", func(c *gin.Context) {
+		c.Redirect(http.StatusMovedPermanently, appPath)
+	})
 	engine.NoRoute(func(c *gin.Context) {
-		c.Redirect(http.StatusMovedPermanently, config.DefaultConfig.WebBaseDir+"/app")
+		c.Redirect(http.StatusMovedPermanently, appPath)
 	})
 
 	// 不需要认证的路由

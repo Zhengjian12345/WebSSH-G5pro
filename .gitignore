@@ -122,10 +122,13 @@ Thumbs.db
 *.iml
 /gossh/go.sum
 /gossh/gossh
+/gossh/webssh
 /gossh/GoWebSSH.db
+/gossh/.GoWebSSH/
 
 /gossh/webssh_*
 upx-5.0.2-win64.zip
-# upx.exe
-# win-build.cmd
+upx.exe
+win-build*.cmd
+webssh/pnpm-lock.yaml
 /gossh/webroot

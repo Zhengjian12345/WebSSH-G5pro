@@ -57,6 +57,7 @@ func SysInit(c *gin.Context) {
 		c.JSON(200, gin.H{"code": 1, "msg": err.Error()})
 		return
 	}
+	initConf.DbType = "sqlite"
 
 	// 1.检查系统是否已经初始化
 	if config.DefaultConfig.IsInit {

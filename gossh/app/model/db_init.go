@@ -5,20 +5,16 @@ import (
 	"fmt"
 	"gossh/app/config"
 	"gossh/gorm"
-	"gossh/gorm/driver/mysql"
-	"gossh/gorm/driver/pgsql"
 	"gossh/gorm/logger"
-	_ "gossh/mysql"
-	_ "gossh/pgsql"
 	"gossh/sqlite"
 	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
-	"time"
 )
 
 var Db *gorm.DB
+var ErrUnsupportedDB = errors.New("仅支持 SQLite 数据库")
 
 func InitDatabase() {
 	if !config.DefaultConfig.IsInit {
@@ -53,7 +49,7 @@ func GetSqliteDb(dsn string) (*gorm.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get database instance: %v", err)
 	}
-	ConfigureDBPool(db, "sqlite")
+	ConfigureDBPool(db)
 
 	if err := sqlDB.Ping(); err != nil {
 		return nil, fmt.Errorf("failed to ping database: %v", err)
@@ -68,49 +64,21 @@ func DbMigrate(dbType, dsn string) error {
 			slog.Error("DbMigrate error", "err_msg", err)
 		}
 	}()
-	if dbType == "pgsql" {
-		db, err := gorm.Open(pgsql.Open(dsn), &gorm.Config{
-			Logger: logger.Default.LogMode(logger.Warn),
-		})
-		if err != nil {
-			return err
-		}
-		ConfigureDBPool(db, dbType)
-		err = db.Exec("select 1=1;").Error
-		if err != nil {
-			return err
-		}
-		Db = db
+	if dbType != "sqlite" {
+		return ErrUnsupportedDB
 	}
 
-	if dbType == "mysql" {
-		db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{
-			Logger: logger.Default.LogMode(logger.Warn),
-		})
-		if err != nil {
-			return err
-		}
-		ConfigureDBPool(db, dbType)
-		err = db.Exec("select 1=1;").Error
-		if err != nil {
-			return err
-		}
-		Db = db
+	db, err := GetSqliteDb(dsn)
+	if err != nil {
+		return err
 	}
-
-	if dbType == "sqlite" {
-		db, err := GetSqliteDb(dsn)
-		if err != nil {
-			return err
-		}
-		Db = db
-	}
+	Db = db
 
 	if Db == nil {
 		return errors.New("请检查数据库链接")
 	}
 
-	err := Db.AutoMigrate(
+	err = Db.AutoMigrate(
 		SshConf{}, WebUser{}, CmdNote{},
 		NetFilter{}, PolicyConf{}, LoginAudit{},
 		SshdConf{}, SshdUser{}, SshdCert{})
@@ -122,21 +90,13 @@ func DbMigrate(dbType, dsn string) error {
 	return nil
 }
 
-func ConfigureDBPool(db *gorm.DB, dbType string) {
+func ConfigureDBPool(db *gorm.DB) {
 	sqlDB, err := db.DB()
 	if err != nil {
 		slog.Warn("configure db pool skipped", "err_msg", err.Error())
 		return
 	}
 
-	if dbType == "sqlite" {
-		sqlDB.SetMaxOpenConns(1)
-		sqlDB.SetMaxIdleConns(1)
-		return
-	}
-
-	sqlDB.SetMaxOpenConns(8)
-	sqlDB.SetMaxIdleConns(2)
-	sqlDB.SetConnMaxIdleTime(5 * time.Minute)
-	sqlDB.SetConnMaxLifetime(30 * time.Minute)
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
 }

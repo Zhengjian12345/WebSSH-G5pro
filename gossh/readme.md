@@ -4,63 +4,7 @@
 gofmt -w -r 'interface{} -> any' .
 ```
 
-### MySQL init
-```bash
-yum -y install mysql-server
-
-systemctl restart mysqld.service
-
-cat >> /etc/my.cnf << "EOF"
-##=========================================================================
-[mysqld]
-bind-address=0.0.0.0
-skip-name-resolve
-##=========================================================================
-EOF
-
-mysql -u root --skip-password
-```
-
-
-```mysql
-
-ALTER USER 'root'@'localhost' IDENTIFIED BY 'mypwd';
-
-CREATE USER 'root'@'%' identified by 'mypwd';
-
-GRANT ALL ON *.* TO 'root'@'%';
-
-ALTER USER `root`@`%` PASSWORD EXPIRE NEVER;
-
-GRANT Grant Option ON *.* TO `root`@`%`;
-
-flush privileges;
-```
-
-### PgSQL init
-```bash
-yum -y install postgresql-server
-postgresql-setup --initdb
-
-cat >> /var/lib/pgsql/data/pg_hba.conf << "EOF"
-##=========================================================================
-host    all             all             0.0.0.0/0            scram-sha-256
-##=========================================================================
-EOF
-
-sed -i "s/^#*listen_addresses = .*$/listen_addresses = '*'/" /var/lib/pgsql/data/postgresql.conf
-
-systemctl restart postgresql.service
-
-su - postgres 
-
-psql
-
-postgres=# \password 
-
-```
-
-Sqlite init
+### SQLite init
 ```shell
 go get github.com/glebarez/sqlite
 

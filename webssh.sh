@@ -5,35 +5,35 @@ BOOT_CMD="sh $Module_dir/service.sh start"
 STOP_CMD="sh $Module_dir/service.sh stop"
 FILE="/etc/rc.local"
 
-SCRIPT_URL="https://raw.githubusercontent.com/cdwangtao/WebSSH-u60pro/refs/heads/master/webssh.sh"
+SCRIPT_URL="https://raw.githubusercontent.com/Jack-bin183/WebSSH-u60pro/refs/heads/master/webssh.sh"
 SCRIPT_TMP="/tmp/webssh_install.sh"
 
-VERSION_URL="https://github.com/cdwangtao/WebSSH-u60pro/releases/latest/download/version.txt"
-WEBSH_URL_PREFIX="https://github.com/cdwangtao/WebSSH-u60pro/releases/latest/download/webssh_"
+VERSION_URL="https://github.com/Jack-bin183/WebSSH-u60pro/releases/latest/download/version.txt"
+WEBSH_URL_PREFIX="https://github.com/Jack-bin183/WebSSH-u60pro/releases/latest/download/webssh_"
 
 PROXIES="
-https://v6.gh-proxy.org/
-https://gh-proxy.org/
-https://hk.gh-proxy.org/
-https://cdn.gh-proxy.org/
-https://edgeone.gh-proxy.org/
-https://fastgit.cc/
-https://git.yylx.win/
 https://gh.llkk.cc/
 https://ghfast.top/
+https://gh-proxy.com/
+https://ghproxy.net/
+https://hub.gitmirror.com/
+https://gh-proxy.org/
+https://v6.gh-proxy.org/
 "
 
 fetch_url() {
     _original_url="$1"
+    _trimmed_url="${_original_url#https://}"
+    _trimmed_url="${_trimmed_url#http://}"
     for _proxy in $PROXIES; do
-        _url="${_proxy}${_original_url}"
-        _result=$(curl -fsSL --connect-timeout 10 "$_url" 2>/dev/null)
+        _url="${_proxy}${_trimmed_url}"
+        _result=$(curl -fsSL --connect-timeout 3 "$_url" 2>/dev/null)
         if [ $? -eq 0 ] && [ -n "$_result" ]; then
             echo "$_result"
             return 0
         fi
     done
-    _result=$(curl -fsSL --connect-timeout 10 "$_original_url" 2>/dev/null)
+    _result=$(curl -fsSL --connect-timeout 3 "$_original_url" 2>/dev/null)
     if [ $? -eq 0 ] && [ -n "$_result" ]; then
         echo "$_result"
         return 0
@@ -45,18 +45,20 @@ download_file() {
     _original_url="$1"
     _output="$2"
     _show_progress="${3:-0}"
+    _trimmed_url="${_original_url#https://}"
+    _trimmed_url="${_trimmed_url#http://}"
     for _proxy in $PROXIES; do
-        _url="${_proxy}${_original_url}"
+        _url="${_proxy}${_trimmed_url}"
         if [ "$_show_progress" = "1" ]; then
-            curl -fSL --connect-timeout 10 -# "$_url" --output "$_output" && return 0
+            curl -fSL --connect-timeout 3 -# "$_url" --output "$_output" && return 0
         else
-            curl -fSL --connect-timeout 10 "$_url" --output "$_output" 2>/dev/null && return 0
+            curl -fSL --connect-timeout 3 "$_url" --output "$_output" 2>/dev/null && return 0
         fi
     done
     if [ "$_show_progress" = "1" ]; then
-        curl -fSL --connect-timeout 10 -# "$_original_url" --output "$_output" && return 0
+        curl -fSL --connect-timeout 3 -# "$_original_url" --output "$_output" && return 0
     else
-        curl -fSL --connect-timeout 10 "$_original_url" --output "$_output" 2>/dev/null && return 0
+        curl -fSL --connect-timeout 3 "$_original_url" --output "$_output" 2>/dev/null && return 0
     fi
     return 1
 }

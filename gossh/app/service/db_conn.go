@@ -5,16 +5,12 @@ import (
 	"gossh/app/model"
 	"gossh/gin"
 	"gossh/gorm"
-	"gossh/gorm/driver/mysql"
-	"gossh/gorm/driver/pgsql"
-	_ "gossh/mysql"
-	_ "gossh/pgsql"
 	"log/slog"
 )
 
 type DbConnConf struct {
 	DbDsn  string `form:"db_dsn" binding:"required,min=1,max=65535" json:"db_dsn"`
-	DbType string `form:"db_type" binding:"required,oneof=sqlite pgsql mysql" json:"db_type"`
+	DbType string `form:"db_type" binding:"required,oneof=sqlite" json:"db_type"`
 }
 
 func DbConnCheck(c *gin.Context) {
@@ -38,44 +34,16 @@ func DbConnCheck(c *gin.Context) {
 
 func DbConnTestCheck(dbConf DbConnConf) error {
 	slog.Info("DB link check", "db_type", dbConf.DbType, "db_dsn", dbConf.DbDsn)
-	if dbConf.DbType == "pgsql" {
-		Db, err := gorm.Open(pgsql.Open(dbConf.DbDsn), &gorm.Config{})
-		if err != nil {
-			return err
-		}
-		defer closeTestDB(Db)
-		model.ConfigureDBPool(Db, dbConf.DbType)
-		err = Db.Exec("select 1=1;").Error
-		if err != nil {
-			return err
-		}
+	if dbConf.DbType != "sqlite" {
+		return model.ErrUnsupportedDB
 	}
 
-	if dbConf.DbType == "mysql" {
-		Db, err := gorm.Open(mysql.Open(dbConf.DbDsn), &gorm.Config{})
-		if err != nil {
-			return err
-		}
-		defer closeTestDB(Db)
-		model.ConfigureDBPool(Db, dbConf.DbType)
-		err = Db.Exec("select 1=1;").Error
-		if err != nil {
-			return err
-		}
+	Db, err := model.GetSqliteDb(dbConf.DbDsn)
+	if err != nil {
+		return err
 	}
-
-	if dbConf.DbType == "sqlite" {
-		Db, err := model.GetSqliteDb(dbConf.DbDsn)
-		if err != nil {
-			return err
-		}
-		defer closeTestDB(Db)
-		err = Db.Exec("select 1=1;").Error
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	defer closeTestDB(Db)
+	return Db.Exec("select 1=1;").Error
 }
 
 func closeTestDB(db *gorm.DB) {

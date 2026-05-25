@@ -13,6 +13,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -28,7 +29,10 @@ import (
 
 var version = "dev"
 
-const GithubRepo = "Jack-bin183/WebSSH-u60pro"
+const (
+	GithubRepo           = "Jack-bin183/WebSSH-u60pro"
+	updateConnectTimeout = 3 * time.Second
+)
 
 type GithubAsset struct {
 	Name               string `json:"name"`
@@ -128,39 +132,48 @@ func (w StaticFile) Open(name string) (fs.File, error) {
 
 func getLatestGithubRelease() (*GithubRelease, error) {
 	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", GithubRepo)
+	client := updateHTTPClient()
+	var lastErr error
 
-	client := &http.Client{
-		Timeout: 12 * time.Second,
+	for _, u := range updateTryURLs(apiURL) {
+		req, err := http.NewRequest(http.MethodGet, u, nil)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		req.Header.Set("Accept", "application/vnd.github+json")
+		req.Header.Set("User-Agent", "WebSSH-u60pro-Updater")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			lastErr = fmt.Errorf("%s 返回异常: %s", u, resp.Status)
+			resp.Body.Close()
+			continue
+		}
+
+		var release GithubRelease
+		err = json.NewDecoder(resp.Body).Decode(&release)
+		resp.Body.Close()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		if strings.TrimSpace(release.TagName) == "" {
+			lastErr = fmt.Errorf("github release tag 为空")
+			continue
+		}
+
+		return &release, nil
 	}
 
-	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "WebSSH-u60pro-Updater")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("github api 返回异常: %s", resp.Status)
-	}
-
-	var release GithubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return nil, err
-	}
-
-	if strings.TrimSpace(release.TagName) == "" {
-		return nil, fmt.Errorf("github release tag 为空")
-	}
-
-	return &release, nil
+	return nil, lastErr
 }
 func selectUpdateAsset(release *GithubRelease) (*GithubAsset, error) {
 	if release == nil {
@@ -225,15 +238,44 @@ func UpdateVersionHandler(c *gin.Context) {
 }
 
 var PROXIES = []string{
-	"https://v6.gh-proxy.org/",
-	"https://gh-proxy.org/",
-	"https://hk.gh-proxy.org/",
-	"https://cdn.gh-proxy.org/",
-	"https://edgeone.gh-proxy.org/",
-	"https://fastgit.cc/",
-	"https://git.yylx.win/",
 	"https://gh.llkk.cc/",
 	"https://ghfast.top/",
+	"https://gh-proxy.com/",
+	"https://ghproxy.net/",
+	"https://hub.gitmirror.com/",
+	"https://gh-proxy.org/",
+	"https://v6.gh-proxy.org/",
+}
+
+func updateHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = (&net.Dialer{
+		Timeout:   updateConnectTimeout,
+		KeepAlive: 30 * time.Second,
+	}).DialContext
+	transport.TLSHandshakeTimeout = updateConnectTimeout
+	transport.ResponseHeaderTimeout = 10 * time.Second
+
+	return &http.Client{Transport: transport}
+}
+
+func updateTryURLs(originalURL string) []string {
+	trimmedURL := strings.TrimPrefix(originalURL, "https://")
+	trimmedURL = strings.TrimPrefix(trimmedURL, "http://")
+
+	urls := make([]string, 0, len(PROXIES)+1)
+	for _, proxy := range PROXIES {
+		proxy = strings.TrimSpace(proxy)
+		if proxy == "" {
+			continue
+		}
+		if !strings.HasSuffix(proxy, "/") {
+			proxy += "/"
+		}
+		urls = append(urls, proxy+trimmedURL)
+	}
+	urls = append(urls, originalURL)
+	return urls
 }
 
 func updateAttemptStatus(rawURL string, originalURL string) {
@@ -260,25 +302,12 @@ func updateAttemptStatus(rawURL string, originalURL string) {
 	})
 }
 
-// downloadFile 支持直连和代理，每次请求单独超时，并记录下载进度
+// downloadFile 代理优先，GitHub 直连兜底，并记录下载进度。
 func downloadFile(downloadURL string, savePath string, totalHint int64) error {
-	// 先构建尝试 URL 列表
-	tryURLs := append([]string{downloadURL}, func() []string {
-		var proxied []string
-		for _, p := range PROXIES {
-			trimmed := strings.TrimPrefix(downloadURL, "https://")
-			if !strings.HasSuffix(p, "/") {
-				p += "/"
-			}
-			proxied = append(proxied, p+trimmed)
-		}
-		return proxied
-	}()...)
-
 	var lastErr error
-	for _, u := range tryURLs {
+	client := updateHTTPClient()
+	for _, u := range updateTryURLs(downloadURL) {
 		updateAttemptStatus(u, downloadURL)
-		client := &http.Client{Timeout: 60 * time.Second} // 每次单独 60 秒
 
 		req, err := http.NewRequest(http.MethodGet, u, nil)
 		if err != nil {
@@ -292,7 +321,7 @@ func downloadFile(downloadURL string, savePath string, totalHint int64) error {
 		if err != nil {
 			lastErr = err
 			setUpdateStatus(func(status *UpdateDownloadStatus) {
-				status.Msg = "当前线路连接失败，正在尝试下一线路"
+				status.Msg = "当前线路 3 秒内未连上或连接失败，正在尝试下一线路"
 			})
 			continue
 		}
@@ -379,7 +408,7 @@ func downloadFile(downloadURL string, savePath string, totalHint int64) error {
 		return nil
 	}
 
-	return fmt.Errorf("下载失败，尝试直连和代理都失败: %v", lastErr)
+	return fmt.Errorf("下载失败，尝试代理和 GitHub 兜底都失败: %v", lastErr)
 }
 
 func createTempUpdateScript(currentBin string, newBin string, logFile string, args []string) (string, error) {

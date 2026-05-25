@@ -11,7 +11,7 @@
           <el-col :span="16">
             <div>
               <el-steps :active="active" finish-status="success">
-                <el-step title="数据库选择" />
+                <el-step title="数据库配置" />
                 <el-step title="Web账号配置" />
                 <el-step title="SSH服务器配置" />
                 <el-step title="完成" />
@@ -22,52 +22,22 @@
 
                 <div v-if="active === 0">
                   <el-form-item label="数据库">
-                    <el-radio-group v-model="form.db_type">
-                      <el-radio value="sqlite">SQLite</el-radio>
-                      <el-radio value="mysql">MySQL</el-radio>
-                      <el-radio value="pgsql">PostgresSQL</el-radio>
-                    </el-radio-group>
+                    <el-tag type="success" size="large">SQLite</el-tag>
                   </el-form-item>
 
-                  <el-form-item v-if="form.db_type === 'sqlite'">
+                  <el-form-item>
                     <el-card style="width: 100%;">
                       <template #header>
                         <div class="card-header">
-                          <span>样例:&nbsp;&nbsp;gowebssh.db</span>
+                          <span>本机 SQLite 数据库</span>
                         </div>
                       </template>
 
-                      <el-input v-model="form.sqlite_dbdsn" minlength="10" maxlength="65535" show-word-limit clearable
-                        placeholder="请输入Sqlite数据库连接配置,参考上面的样例">
-                      </el-input>
-                    </el-card>
-                  </el-form-item>
-
-                  <el-form-item v-if="form.db_type === 'mysql'">
-                    <el-card style="width: 100%;">
-                      <template #header>
-                        <div class="card-header">
-                          <span>样例:&nbsp;&nbsp;root:mypwd@tcp(192.168.150.200:3306)/mydb?charset=utf8mb4&parseTime=True&loc=Local</span>
-                        </div>
-                      </template>
-
-                      <el-input v-model="form.mysql_dbdsn" minlength="10" maxlength="65535" show-word-limit clearable
-                        placeholder="请输入MySQL数据库连接配置,参考上面的样例">
-                      </el-input>
-                    </el-card>
-                  </el-form-item>
-
-                  <el-form-item v-if="form.db_type === 'pgsql'">
-                    <el-card style="width: 100%;">
-                      <template #header>
-                        <div class="card-header">
-                          <span>样例:&nbsp;&nbsp;host=192.168.150.200 port=5432 user=postgres dbname=mydb sslmode=disable
-                            password=mypwd</span>
-                        </div>
-                      </template>
-
-                      <el-input v-model="form.pgsql_dbdsn" minlength="10" maxlength="65535" show-word-limit clearable
-                        placeholder="请输入PostgresSQL数据库连接配置,参考上面的样例">
+                      <p class="init-tip">
+                        U60Pro 版本只使用本地 SQLite，默认数据库文件为gowebssh.db，会保存在程序启动目录下。（先 cd 到目录，再运行程序）
+                      </p>
+                      <el-input v-model="form.sqlite_dbdsn" minlength="2" maxlength="255" show-word-limit clearable
+                        placeholder="数据库文件名，例如 gowebssh.db">
                       </el-input>
                     </el-card>
                   </el-form-item>
@@ -182,8 +152,6 @@ let router = useRouter();
 
 const form = reactive({
   sqlite_dbdsn: "gowebssh.db",
-  mysql_dbdsn: "",
-  pgsql_dbdsn: "",
   db_type: "sqlite",
   name: "",
   pwd: "",
@@ -194,29 +162,11 @@ const form = reactive({
 })
 
 let db_dsn = computed<string>(() => {
-  if (form.db_type == "mysql") {
-    return form.mysql_dbdsn
-  }
-  if (form.db_type == "pgsql") {
-    return form.pgsql_dbdsn
-  }
-  if (form.db_type == "sqlite") {
-    return form.sqlite_dbdsn
-  }
-  return "";
+  return form.sqlite_dbdsn
 })
 
 let db_kind = computed<string>(() => {
-  if (form.db_type == "mysql") {
-    return "MySQL"
-  }
-  if (form.db_type == "pgsql") {
-    return "PostgreSQL"
-  }
-  if (form.db_type == "sqlite") {
-    return "SQLite"
-  }
-  return "";
+  return "SQLite"
 })
 
 
@@ -272,6 +222,7 @@ function randomString(length: number) {
 }
 
 function sysInit() {
+  form.db_type = "sqlite";
   let initData = {
     "db_type": form.db_type,
     "db_dsn": db_dsn.value.trim(),
@@ -284,8 +235,8 @@ function sysInit() {
     "sshd_user": form.sshd_user.trim(),
     "sshd_pwd": form.sshd_pwd.trim()
   }
-  if (initData.db_dsn.length < 5) {
-    ElMessage.error("系统初始化错误:请输入正确的数据库连接")
+  if (initData.db_dsn.length < 2) {
+    ElMessage.error("系统初始化错误:请输入 SQLite 数据库文件名")
     return
   }
 
@@ -332,4 +283,10 @@ onBeforeMount(() => {
 
 </script>
 
-<style scoped></style>
+<style scoped>
+.init-tip {
+  color: var(--el-text-color-regular);
+  line-height: 1.7;
+  margin: 0 0 12px;
+}
+</style>

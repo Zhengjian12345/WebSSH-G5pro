@@ -46,8 +46,8 @@ func (c *AppConfig) write() error {
 var DefaultConfig = AppConfig{
 	WebBaseDir:    "",
 	AppName:       "GoWebSHH",
-	DbType:        "mysql",
-	DbDsn:         "",
+	DbType:        "sqlite",
+	DbDsn:         "gowebssh.db",
 	IsInit:        false,
 	JwtSecret:     utils.RandString(64),
 	AesSecret:     utils.RandString(32),

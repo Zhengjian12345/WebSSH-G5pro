@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"embed"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"gossh/app/config"
@@ -31,22 +30,17 @@ import (
 var version = "dev"
 
 const (
-	GithubRepo           = "Jack-bin183/WebSSH-u60pro"
-	updateConnectTimeout = 3 * time.Second
+	GithubRepo            = "Jack-bin183/WebSSH-u60pro"
+	updateConnectTimeout  = 3 * time.Second
+	updateVersionFileURL  = "https://raw.githubusercontent.com/" + GithubRepo + "/master/version.txt"
+	updateReleaseURL      = "https://github.com/" + GithubRepo + "/releases/latest"
+	updateDownloadBaseURL = "https://github.com/" + GithubRepo + "/releases/latest/download/webssh_"
 )
 
 type GithubAsset struct {
 	Name               string `json:"name"`
 	Size               int64  `json:"size"`
 	BrowserDownloadURL string `json:"browser_download_url"`
-}
-
-type GithubRelease struct {
-	TagName string        `json:"tag_name"`
-	HTMLURL string        `json:"html_url"`
-	Name    string        `json:"name"`
-	Body    string        `json:"body"`
-	Assets  []GithubAsset `json:"assets"`
 }
 
 type UpdateVersionInfo struct {
@@ -146,19 +140,17 @@ func (w StaticFile) Open(name string) (fs.File, error) {
 	return file, err
 }
 
-func getLatestGithubRelease() (*GithubRelease, error) {
-	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", GithubRepo)
+func getLatestVersionFromFile(proxies []string) (string, error) {
 	client := updateHTTPClient()
 	var lastErr error
 
-	for _, u := range updateTryURLs(apiURL) {
+	for _, u := range buildUpdateTryURLs(updateVersionFileURL, proxies) {
 		req, err := http.NewRequest(http.MethodGet, u, nil)
 		if err != nil {
 			lastErr = err
 			continue
 		}
 
-		req.Header.Set("Accept", "application/vnd.github+json")
 		req.Header.Set("User-Agent", "WebSSH-u60pro-Updater")
 
 		resp, err := client.Do(req)
@@ -173,78 +165,95 @@ func getLatestGithubRelease() (*GithubRelease, error) {
 			continue
 		}
 
-		var release GithubRelease
-		err = json.NewDecoder(resp.Body).Decode(&release)
+		data, err := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		resp.Body.Close()
 		if err != nil {
 			lastErr = err
 			continue
 		}
 
-		if strings.TrimSpace(release.TagName) == "" {
-			lastErr = fmt.Errorf("github release tag 为空")
+		latestVersion := strings.TrimSpace(string(data))
+		if latestVersion == "" {
+			lastErr = fmt.Errorf("version.txt 内容为空")
+			continue
+		}
+		if !isSafeUpdateVersion(latestVersion) {
+			lastErr = fmt.Errorf("version.txt 版本号格式不正确: %s", latestVersion)
 			continue
 		}
 
-		return &release, nil
+		return latestVersion, nil
 	}
 
-	return nil, lastErr
+	if lastErr == nil {
+		lastErr = fmt.Errorf("没有可用的更新线路")
+	}
+	return "", fmt.Errorf("已尝试代理和 raw.githubusercontent.com 兜底: %w", lastErr)
 }
-func selectUpdateAsset(release *GithubRelease) (*GithubAsset, error) {
-	if release == nil {
-		return nil, fmt.Errorf("release 为空")
+
+func isSafeUpdateVersion(v string) bool {
+	if len(v) > 128 {
+		return false
 	}
-
-	for _, asset := range release.Assets {
-		name := strings.ToLower(asset.Name)
-
-		if strings.HasPrefix(name, "webssh_") {
-			return &asset, nil
+	for _, r := range v {
+		if r >= 'a' && r <= 'z' {
+			continue
+		}
+		if r >= 'A' && r <= 'Z' {
+			continue
+		}
+		if r >= '0' && r <= '9' {
+			continue
+		}
+		switch r {
+		case '.', '_', '-':
+			continue
+		default:
+			return false
 		}
 	}
-
-	for _, asset := range release.Assets {
-		name := strings.ToLower(asset.Name)
-
-		if strings.Contains(name, "webssh") &&
-			!strings.HasSuffix(name, ".txt") &&
-			!strings.HasSuffix(name, ".sha256") &&
-			!strings.HasSuffix(name, ".json") {
-			return &asset, nil
-		}
-	}
-
-	return nil, fmt.Errorf("没有找到可用的 webssh 二进制资产")
+	return true
 }
+
+func updateAssetForVersion(latestVersion string) GithubAsset {
+	return GithubAsset{
+		Name:               "webssh_" + latestVersion,
+		Size:               0,
+		BrowserDownloadURL: updateDownloadBaseURL + latestVersion,
+	}
+}
+
 func UpdateVersionHandler(c *gin.Context) {
-	release, err := getLatestGithubRelease()
+	updateProxies, err := updateProxiesFromRaw(c.Query("proxy_url"))
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code": 1,
-			"msg":  "获取 GitHub 最新版本失败: " + err.Error(),
+			"msg":  err.Error(),
+		})
+		return
+	}
+
+	latestVersion, err := getLatestVersionFromFile(updateProxies)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"code": 1,
+			"msg":  "获取 version.txt 失败: " + err.Error(),
 		})
 		return
 	}
 
 	currentVersion := strings.TrimSpace(version)
-	latestVersion := strings.TrimSpace(release.TagName)
-
-	asset, assetErr := selectUpdateAsset(release)
+	asset := updateAssetForVersion(latestVersion)
 
 	info := UpdateVersionInfo{
 		CurrentVersion: currentVersion,
 		LatestVersion:  latestVersion,
 		HasUpdate:      currentVersion != latestVersion,
-		ReleaseURL:     release.HTMLURL,
-		ReleaseName:    release.Name,
-		ReleaseBody:    release.Body,
+		ReleaseURL:     updateReleaseURL,
+		ReleaseName:    "WebSSH " + latestVersion,
 		ProxyURLs:      append([]string(nil), PROXIES...),
-	}
-
-	if assetErr == nil && asset != nil {
-		info.AssetName = asset.Name
-		info.AssetSize = asset.Size
+		AssetName:      asset.Name,
+		AssetSize:      asset.Size,
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -285,6 +294,14 @@ func buildUpdateTryURLs(originalURL string, proxies []string) []string {
 	trimmedURL = strings.TrimPrefix(trimmedURL, "http://")
 
 	urls := make([]string, 0, len(proxies)+1)
+	seen := make(map[string]struct{}, len(proxies)*2+1)
+	addURL := func(rawURL string) {
+		if _, ok := seen[rawURL]; ok {
+			return
+		}
+		seen[rawURL] = struct{}{}
+		urls = append(urls, rawURL)
+	}
 	for _, proxy := range proxies {
 		proxy = strings.TrimSpace(proxy)
 		if proxy == "" {
@@ -293,9 +310,10 @@ func buildUpdateTryURLs(originalURL string, proxies []string) []string {
 		if !strings.HasSuffix(proxy, "/") {
 			proxy += "/"
 		}
-		urls = append(urls, proxy+trimmedURL)
+		addURL(proxy + originalURL)
+		addURL(proxy + trimmedURL)
 	}
-	urls = append(urls, originalURL)
+	addURL(originalURL)
 	return urls
 }
 
@@ -318,6 +336,18 @@ func normalizeUpdateProxy(rawProxy string) (string, error) {
 		proxy += "/"
 	}
 	return proxy, nil
+}
+
+func updateProxiesFromRaw(rawProxy string) ([]string, error) {
+	updateProxies := append([]string(nil), PROXIES...)
+	proxyURL, err := normalizeUpdateProxy(rawProxy)
+	if err != nil {
+		return nil, err
+	}
+	if proxyURL != "" {
+		updateProxies = []string{proxyURL}
+	}
+	return updateProxies, nil
 }
 
 func updateAttemptStatus(rawURL string, originalURL string) {
@@ -651,8 +681,7 @@ func UpdateRunHandler(c *gin.Context) {
 		return
 	}
 
-	updateProxies := append([]string(nil), PROXIES...)
-	proxyURL, err := normalizeUpdateProxy(runReq.ProxyURL)
+	updateProxies, err := updateProxiesFromRaw(runReq.ProxyURL)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code": 1,
@@ -660,21 +689,17 @@ func UpdateRunHandler(c *gin.Context) {
 		})
 		return
 	}
-	if proxyURL != "" {
-		updateProxies = []string{proxyURL}
-	}
 
-	release, err := getLatestGithubRelease()
+	latestVersion, err := getLatestVersionFromFile(updateProxies)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code": 1,
-			"msg":  "获取 GitHub 最新版本失败: " + err.Error(),
+			"msg":  "获取 version.txt 失败: " + err.Error(),
 		})
 		return
 	}
 
 	currentVersion := strings.TrimSpace(version)
-	latestVersion := strings.TrimSpace(release.TagName)
 
 	if currentVersion == latestVersion {
 		c.JSON(http.StatusOK, gin.H{
@@ -688,14 +713,7 @@ func UpdateRunHandler(c *gin.Context) {
 		return
 	}
 
-	asset, err := selectUpdateAsset(release)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"code": 1,
-			"msg":  err.Error(),
-		})
-		return
-	}
+	asset := updateAssetForVersion(latestVersion)
 
 	setUpdateStatus(func(status *UpdateDownloadStatus) {
 		*status = UpdateDownloadStatus{
@@ -705,14 +723,14 @@ func UpdateRunHandler(c *gin.Context) {
 			Total:          asset.Size,
 			CurrentVersion: currentVersion,
 			LatestVersion:  latestVersion,
-			ReleaseURL:     release.HTMLURL,
+			ReleaseURL:     updateReleaseURL,
 			StartedAt:      time.Now().Format(time.RFC3339),
 		}
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	setUpdateCancel(cancel)
-	go runUpdateTask(ctx, cancel, asset, latestVersion, release.HTMLURL, updateProxies)
+	go runUpdateTask(ctx, cancel, &asset, latestVersion, updateReleaseURL, updateProxies)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code": 0,

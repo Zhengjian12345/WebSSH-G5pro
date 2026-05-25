@@ -112,7 +112,7 @@
               </div>
               <div class="right" style="text-align: right">
                 <el-button-group>
-                  <el-button type="primary" :icon="Upload" :loading="chkingUpdate" @click="checkUpdate"></el-button>
+                  <el-button type="primary" :icon="Upload" :loading="chkingUpdate" @click="openUpdateDialog"></el-button>
 
                   <el-button type="primary" :icon="Avatar" @click="data.modify_pwd_dialog_visible = true"></el-button>
 
@@ -159,7 +159,7 @@
           <div>
             <el-dialog
               v-model="updateConfirmDialogVisible"
-              title="发现新版本"
+              :title="updateVersionInfo.has_update ? '发现新版本' : '检测更新'"
               width="92%"
               style="max-width: 520px;"
               custom-class="modern-dialog update-confirm-dialog"
@@ -169,13 +169,13 @@
               <div class="update-confirm-card">
                 <div class="update-confirm-head">
                   <div>
-                    <div class="update-confirm-kicker">发现可用更新</div>
-                    <div class="update-confirm-version">{{ updateVersionInfo.latest_version || "-" }}</div>
+                    <div class="update-confirm-kicker">{{ updateVersionInfo.has_update ? '发现可用更新' : '选择检测线路' }}</div>
+                    <div class="update-confirm-version">{{ updateVersionInfo.latest_version || "WebSSH" }}</div>
                   </div>
-                  <span>NEW</span>
+                  <span>{{ updateVersionInfo.has_update ? 'NEW' : 'CHECK' }}</span>
                 </div>
 
-                <div class="update-confirm-grid">
+                <div v-if="updateVersionInfo.has_update" class="update-confirm-grid">
                   <div><label>当前版本</label><strong>{{ updateVersionInfo.current_version || "-" }}</strong></div>
                   <div><label>最新版本</label><strong>{{ updateVersionInfo.latest_version || "-" }}</strong></div>
                   <div><label>更新文件</label><strong>{{ updateVersionInfo.asset_name || "-" }}</strong></div>
@@ -215,7 +215,13 @@
               <template #footer>
                 <div class="dialog-footer">
                   <el-button @click="updateConfirmDialogVisible = false">取消</el-button>
-                  <el-button type="primary" :loading="chkingUpdate" @click="confirmRunUpdate">开始更新</el-button>
+                  <el-button
+                    type="primary"
+                    :loading="chkingUpdate"
+                    @click="updateVersionInfo.has_update ? confirmRunUpdate() : checkUpdate()"
+                  >
+                    {{ updateVersionInfo.has_update ? '开始更新' : '检测更新' }}
+                  </el-button>
                 </div>
               </template>
             </el-dialog>
@@ -1065,6 +1071,16 @@ const updateSelectedProxy = ref("");
 const updateCustomProxy = ref("");
 let updateStatusTimer = 0;
 
+const builtinUpdateProxyURLs = [
+  "https://gh.llkk.cc/",
+  "https://ghfast.top/",
+  "https://gh-proxy.com/",
+  "https://ghproxy.net/",
+  "https://hub.gitmirror.com/",
+  "https://gh-proxy.org/",
+  "https://v6.gh-proxy.org/",
+];
+
 interface UpdateProgressInfo {
   state: "idle" | "starting" | "downloading" | "installing" | "restarting" | "failed" | "canceled" | string;
   msg: string;
@@ -1151,7 +1167,7 @@ const updateStateText = computed(() => {
   }
 });
 
-const updateProxyOptions = computed(() => updateVersionInfo.proxy_urls || []);
+const updateProxyOptions = computed(() => updateVersionInfo.proxy_urls.length ? updateVersionInfo.proxy_urls : builtinUpdateProxyURLs);
 const canCancelUpdate = computed(() => ["starting", "downloading"].includes(updateProgress.state));
 
 function formatUpdateSize(size?: number) {
@@ -1196,6 +1212,41 @@ function updateProxyUrlForRun() {
   return "";
 }
 
+function validateUpdateProxySelection() {
+  const proxyURL = updateProxyUrlForRun();
+  if (updateProxyMode.value === "builtin" && !proxyURL) {
+    ElMessage.error("请选择内置代理 URL");
+    return false;
+  }
+  if (updateProxyMode.value === "custom" && !proxyURL) {
+    ElMessage.error("请输入自定义代理 URL");
+    return false;
+  }
+  return true;
+}
+
+function resetUpdateVersionInfo() {
+  Object.assign(updateVersionInfo, {
+    current_version: "",
+    latest_version: "",
+    has_update: false,
+    release_url: "",
+    release_name: "",
+    release_body: "",
+    asset_name: "",
+    asset_size: 0,
+    proxy_urls: builtinUpdateProxyURLs,
+  });
+}
+
+function openUpdateDialog() {
+  resetUpdateVersionInfo();
+  if (!updateSelectedProxy.value) {
+    updateSelectedProxy.value = builtinUpdateProxyURLs[0] || "";
+  }
+  updateConfirmDialogVisible.value = true;
+}
+
 function stopUpdateStatusPolling() {
   if (updateStatusTimer) {
     clearInterval(updateStatusTimer);
@@ -1230,11 +1281,16 @@ function startUpdateStatusPolling() {
 
 async function checkUpdate() {
   if (chkingUpdate.value) return;
+  if (!validateUpdateProxySelection()) return;
 
   chkingUpdate.value = true;
 
   try {
-    const ret = await axios.get<ResponseData>("/api/update/version");
+    const ret = await axios.get<ResponseData>("/api/update/version", {
+      params: {
+        proxy_url: updateProxyUrlForRun(),
+      },
+    });
 
     if (ret.data.code !== 0) {
       ElMessage.error(ret.data.msg || "检测更新失败");
@@ -1245,6 +1301,7 @@ async function checkUpdate() {
 
     if (!info.has_update) {
       ElMessage.success(`已是最新版本：${info.current_version}`);
+      updateConfirmDialogVisible.value = false;
       return;
     }
 
@@ -1259,9 +1316,6 @@ async function checkUpdate() {
       asset_size: Number(info.asset_size || 0),
       proxy_urls: Array.isArray(info.proxy_urls) ? info.proxy_urls : [],
     });
-    updateSelectedProxy.value = updateVersionInfo.proxy_urls[0] || "";
-    updateProxyMode.value = "auto";
-    updateCustomProxy.value = "";
     updateConfirmDialogVisible.value = true;
   } catch (err: any) {
     if (err === "cancel" || err === "close") {
@@ -1317,15 +1371,7 @@ async function runUpdate() {
 }
 
 async function confirmRunUpdate() {
-  const proxyURL = updateProxyUrlForRun();
-  if (updateProxyMode.value === "builtin" && !proxyURL) {
-    ElMessage.error("请选择内置代理 URL");
-    return;
-  }
-  if (updateProxyMode.value === "custom" && !proxyURL) {
-    ElMessage.error("请输入自定义代理 URL");
-    return;
-  }
+  if (!validateUpdateProxySelection()) return;
 
   chkingUpdate.value = true;
   try {

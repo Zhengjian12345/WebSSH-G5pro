@@ -103,6 +103,5 @@ jobs:
           prerelease: false
           files: |
             gossh/webssh_${{ steps.version.outputs.version }}
-            version.txt
         env:
           GITHUB_TOKEN: ${{ secrets.PERSONAL_TOKEN }}

@@ -264,13 +264,13 @@ func UpdateVersionHandler(c *gin.Context) {
 }
 
 var PROXIES = []string{
-	"https://gh.llkk.cc/",
+	"https://v6.gh-proxy.org/",
 	"https://ghfast.top/",
 	"https://gh-proxy.com/",
 	"https://ghproxy.net/",
+	"https://gh.llkk.cc/",
 	"https://hub.gitmirror.com/",
 	"https://gh-proxy.org/",
-	"https://v6.gh-proxy.org/",
 }
 
 func updateHTTPClient() *http.Client {

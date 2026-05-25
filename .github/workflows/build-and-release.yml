@@ -70,7 +70,9 @@ jobs:
 
       # 8. UPX 压缩（可选）
       - name: Install UPX
-        run: sudo apt-get update && sudo apt-get install -y upx-ucl
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y upx-ucl || sudo apt-get install -y upx
 
       - name: Compress binary
         run: |

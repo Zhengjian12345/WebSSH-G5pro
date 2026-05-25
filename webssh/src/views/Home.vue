@@ -206,7 +206,7 @@
                     <el-input
                       v-model="updateCustomProxy"
                       clearable
-                      placeholder="例如 https://gh.llkk.cc/"
+                      placeholder="例如 https://gh-proxy.org/"
                     />
                   </el-form-item>
                 </el-form>
@@ -1072,13 +1072,13 @@ const updateCustomProxy = ref("");
 let updateStatusTimer = 0;
 
 const builtinUpdateProxyURLs = [
-  "https://gh.llkk.cc/",
-  "https://ghfast.top/",
-  "https://gh-proxy.com/",
-  "https://ghproxy.net/",
-  "https://hub.gitmirror.com/",
-  "https://gh-proxy.org/",
-  "https://v6.gh-proxy.org/",
+	"https://v6.gh-proxy.org/",
+	"https://ghfast.top/",
+	"https://gh-proxy.com/",
+	"https://ghproxy.net/",
+	"https://gh.llkk.cc/",
+	"https://hub.gitmirror.com/",
+	"https://gh-proxy.org/",
 ];
 
 interface UpdateProgressInfo {

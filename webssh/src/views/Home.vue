@@ -158,6 +158,69 @@
 
           <div>
             <el-dialog
+              v-model="updateConfirmDialogVisible"
+              title="发现新版本"
+              width="92%"
+              style="max-width: 520px;"
+              custom-class="modern-dialog update-confirm-dialog"
+              :close-on-click-modal="!chkingUpdate"
+              :close-on-press-escape="!chkingUpdate"
+            >
+              <div class="update-confirm-card">
+                <div class="update-confirm-head">
+                  <div>
+                    <div class="update-confirm-kicker">发现可用更新</div>
+                    <div class="update-confirm-version">{{ updateVersionInfo.latest_version || "-" }}</div>
+                  </div>
+                  <span>NEW</span>
+                </div>
+
+                <div class="update-confirm-grid">
+                  <div><label>当前版本</label><strong>{{ updateVersionInfo.current_version || "-" }}</strong></div>
+                  <div><label>最新版本</label><strong>{{ updateVersionInfo.latest_version || "-" }}</strong></div>
+                  <div><label>更新文件</label><strong>{{ updateVersionInfo.asset_name || "-" }}</strong></div>
+                  <div><label>文件大小</label><strong>{{ formatUpdateSize(updateVersionInfo.asset_size) }}</strong></div>
+                </div>
+
+                <el-form label-position="top" class="update-proxy-form">
+                  <el-form-item label="代理方式">
+                    <el-radio-group v-model="updateProxyMode">
+                      <el-radio-button value="auto">自动尝试内置代理</el-radio-button>
+                      <el-radio-button value="builtin">指定内置代理</el-radio-button>
+                      <el-radio-button value="custom">自定义代理</el-radio-button>
+                    </el-radio-group>
+                  </el-form-item>
+
+                  <el-form-item v-if="updateProxyMode === 'builtin'" label="内置代理 URL">
+                    <el-select v-model="updateSelectedProxy" filterable style="width: 100%;">
+                      <el-option
+                        v-for="proxy in updateProxyOptions"
+                        :key="proxy"
+                        :label="proxy"
+                        :value="proxy"
+                      />
+                    </el-select>
+                  </el-form-item>
+
+                  <el-form-item v-if="updateProxyMode === 'custom'" label="自定义代理 URL">
+                    <el-input
+                      v-model="updateCustomProxy"
+                      clearable
+                      placeholder="例如 https://gh.llkk.cc/"
+                    />
+                  </el-form-item>
+                </el-form>
+              </div>
+
+              <template #footer>
+                <div class="dialog-footer">
+                  <el-button @click="updateConfirmDialogVisible = false">取消</el-button>
+                  <el-button type="primary" :loading="chkingUpdate" @click="confirmRunUpdate">开始更新</el-button>
+                </div>
+              </template>
+            </el-dialog>
+
+            <el-dialog
               v-model="updateProgressDialogVisible"
               title="正在更新 WebSSH"
               width="92%"
@@ -216,6 +279,21 @@
                     @click="updateProgressDialogVisible = false"
                   >
                     关闭
+                  </el-button>
+                  <el-button
+                    v-else-if="updateProgress.state === 'canceled'"
+                    type="primary"
+                    @click="updateProgressDialogVisible = false"
+                  >
+                    关闭
+                  </el-button>
+                  <el-button
+                    v-else-if="canCancelUpdate"
+                    type="danger"
+                    :loading="cancelingUpdate"
+                    @click="cancelUpdateDownload"
+                  >
+                    取消下载
                   </el-button>
                   <el-button v-else disabled>
                     更新过程中请不要关闭页面
@@ -980,10 +1058,15 @@ const filterHostTable = computed(() =>
 // 检查更新
 const chkingUpdate = ref(false);
 const updateProgressDialogVisible = ref(false);
+const updateConfirmDialogVisible = ref(false);
+const cancelingUpdate = ref(false);
+const updateProxyMode = ref<"auto" | "builtin" | "custom">("auto");
+const updateSelectedProxy = ref("");
+const updateCustomProxy = ref("");
 let updateStatusTimer = 0;
 
 interface UpdateProgressInfo {
-  state: "idle" | "starting" | "downloading" | "installing" | "restarting" | "failed" | string;
+  state: "idle" | "starting" | "downloading" | "installing" | "restarting" | "failed" | "canceled" | string;
   msg: string;
   mode: string;
   domain: string;
@@ -996,6 +1079,30 @@ interface UpdateProgressInfo {
   latest_version: string;
   release_url: string;
 }
+
+interface UpdateVersionInfo {
+  current_version: string;
+  latest_version: string;
+  has_update: boolean;
+  release_url: string;
+  release_name: string;
+  release_body: string;
+  asset_name: string;
+  asset_size: number;
+  proxy_urls: string[];
+}
+
+const updateVersionInfo = reactive<UpdateVersionInfo>({
+  current_version: "",
+  latest_version: "",
+  has_update: false,
+  release_url: "",
+  release_name: "",
+  release_body: "",
+  asset_name: "",
+  asset_size: 0,
+  proxy_urls: [],
+});
 
 const updateProgress = reactive<UpdateProgressInfo>({
   state: "idle",
@@ -1037,10 +1144,15 @@ const updateStateText = computed(() => {
       return "即将重启";
     case "failed":
       return "更新失败";
+    case "canceled":
+      return "已取消";
     default:
       return "等待中";
   }
 });
+
+const updateProxyOptions = computed(() => updateVersionInfo.proxy_urls || []);
+const canCancelUpdate = computed(() => ["starting", "downloading"].includes(updateProgress.state));
 
 function formatUpdateSize(size?: number) {
   const bytes = Number(size || 0);
@@ -1054,15 +1166,6 @@ function formatUpdateSize(size?: number) {
     unitIndex++;
   }
   return `${value.toFixed(value >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
-}
-
-function escapeHtml(value: any) {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
 }
 
 function updateProgressFromStatus(status: any) {
@@ -1083,6 +1186,16 @@ function updateProgressFromStatus(status: any) {
   });
 }
 
+function updateProxyUrlForRun() {
+  if (updateProxyMode.value === "builtin") {
+    return updateSelectedProxy.value.trim();
+  }
+  if (updateProxyMode.value === "custom") {
+    return updateCustomProxy.value.trim();
+  }
+  return "";
+}
+
 function stopUpdateStatusPolling() {
   if (updateStatusTimer) {
     clearInterval(updateStatusTimer);
@@ -1095,8 +1208,9 @@ async function refreshUpdateStatus() {
     const ret = await axios.get<ResponseData>("/api/update/status");
     if (ret.data.code === 0) {
       updateProgressFromStatus(ret.data.data);
-      if (["failed", "restarting"].includes(updateProgress.state)) {
+      if (["failed", "restarting", "canceled"].includes(updateProgress.state)) {
         stopUpdateStatusPolling();
+        cancelingUpdate.value = false;
       }
     }
   } catch (err) {
@@ -1134,34 +1248,21 @@ async function checkUpdate() {
       return;
     }
 
-    await ElMessageBox.confirm(
-      `<div class="update-confirm-card">
-        <div class="update-confirm-head">
-          <div>
-            <div class="update-confirm-kicker">发现可用更新</div>
-            <div class="update-confirm-version">${escapeHtml(info.latest_version)}</div>
-          </div>
-          <span>NEW</span>
-        </div>
-        <div class="update-confirm-grid">
-          <div><label>当前版本</label><strong>${escapeHtml(info.current_version)}</strong></div>
-          <div><label>最新版本</label><strong>${escapeHtml(info.latest_version)}</strong></div>
-          <div><label>更新文件</label><strong>${escapeHtml(info.asset_name || "-")}</strong></div>
-          <div><label>文件大小</label><strong>${formatUpdateSize(info.asset_size)}</strong></div>
-        </div>
-        <p>确认后将开始下载更新文件，下载期间会显示连接方式、请求域名和实时进度。</p>
-      </div>`,
-      "发现新版本",
-      {
-        confirmButtonText: "确认更新",
-        cancelButtonText: "取消",
-        type: "warning",
-        customClass: "update-confirm-message",
-        dangerouslyUseHTMLString: true,
-      }
-    );
-
-    await runUpdate();
+    Object.assign(updateVersionInfo, {
+      current_version: info.current_version || "",
+      latest_version: info.latest_version || "",
+      has_update: Boolean(info.has_update),
+      release_url: info.release_url || "",
+      release_name: info.release_name || "",
+      release_body: info.release_body || "",
+      asset_name: info.asset_name || "",
+      asset_size: Number(info.asset_size || 0),
+      proxy_urls: Array.isArray(info.proxy_urls) ? info.proxy_urls : [],
+    });
+    updateSelectedProxy.value = updateVersionInfo.proxy_urls[0] || "";
+    updateProxyMode.value = "auto";
+    updateCustomProxy.value = "";
+    updateConfirmDialogVisible.value = true;
   } catch (err: any) {
     if (err === "cancel" || err === "close") {
       ElMessage.info("已取消更新");
@@ -1188,7 +1289,9 @@ async function runUpdate() {
       percent: 0,
     });
 
-    const ret = await axios.post<ResponseData>("/api/update/run");
+    const ret = await axios.post<ResponseData>("/api/update/run", {
+      proxy_url: updateProxyUrlForRun(),
+    });
 
     if (ret.data.code === 0) {
       updateProgressFromStatus(ret.data.data);
@@ -1210,6 +1313,45 @@ async function runUpdate() {
     updateProgress.state = "failed";
     updateProgress.msg = "执行更新异常，可能程序正在重启";
     ElMessage.error("执行更新异常，可能程序正在重启");
+  }
+}
+
+async function confirmRunUpdate() {
+  const proxyURL = updateProxyUrlForRun();
+  if (updateProxyMode.value === "builtin" && !proxyURL) {
+    ElMessage.error("请选择内置代理 URL");
+    return;
+  }
+  if (updateProxyMode.value === "custom" && !proxyURL) {
+    ElMessage.error("请输入自定义代理 URL");
+    return;
+  }
+
+  chkingUpdate.value = true;
+  try {
+    updateConfirmDialogVisible.value = false;
+    await runUpdate();
+  } finally {
+    chkingUpdate.value = false;
+  }
+}
+
+async function cancelUpdateDownload() {
+  if (cancelingUpdate.value) return;
+  cancelingUpdate.value = true;
+  try {
+    const ret = await axios.post<ResponseData>("/api/update/cancel");
+    updateProgressFromStatus(ret.data.data);
+    if (ret.data.code === 0) {
+      ElMessage.info(ret.data.msg || "已取消下载");
+    } else {
+      ElMessage.warning(ret.data.msg || "当前更新不可取消");
+    }
+  } catch (err) {
+    console.log(err);
+    ElMessage.error("取消下载失败");
+  } finally {
+    cancelingUpdate.value = false;
   }
 }
 

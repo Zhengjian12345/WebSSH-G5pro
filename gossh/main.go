@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -49,14 +50,15 @@ type GithubRelease struct {
 }
 
 type UpdateVersionInfo struct {
-	CurrentVersion string `json:"current_version"`
-	LatestVersion  string `json:"latest_version"`
-	HasUpdate      bool   `json:"has_update"`
-	ReleaseURL     string `json:"release_url"`
-	ReleaseName    string `json:"release_name"`
-	ReleaseBody    string `json:"release_body"`
-	AssetName      string `json:"asset_name"`
-	AssetSize      int64  `json:"asset_size"`
+	CurrentVersion string   `json:"current_version"`
+	LatestVersion  string   `json:"latest_version"`
+	HasUpdate      bool     `json:"has_update"`
+	ReleaseURL     string   `json:"release_url"`
+	ReleaseName    string   `json:"release_name"`
+	ReleaseBody    string   `json:"release_body"`
+	AssetName      string   `json:"asset_name"`
+	AssetSize      int64    `json:"asset_size"`
+	ProxyURLs      []string `json:"proxy_urls"`
 }
 
 type UpdateDownloadStatus struct {
@@ -78,6 +80,8 @@ type UpdateDownloadStatus struct {
 
 var updateStatusMu sync.RWMutex
 var updateStatus = UpdateDownloadStatus{State: "idle", Msg: "暂无更新任务"}
+var updateCancelMu sync.Mutex
+var updateCancel context.CancelFunc
 
 func getUpdateStatus() UpdateDownloadStatus {
 	updateStatusMu.RLock()
@@ -102,6 +106,18 @@ func setUpdateStatus(fn func(*UpdateDownloadStatus)) UpdateDownloadStatus {
 func isUpdateBusy() bool {
 	state := getUpdateStatus().State
 	return state == "starting" || state == "downloading" || state == "installing" || state == "restarting"
+}
+
+func setUpdateCancel(cancel context.CancelFunc) {
+	updateCancelMu.Lock()
+	defer updateCancelMu.Unlock()
+	updateCancel = cancel
+}
+
+func clearUpdateCancel() {
+	updateCancelMu.Lock()
+	defer updateCancelMu.Unlock()
+	updateCancel = nil
 }
 
 // 使用go 1.16+ 新特性
@@ -223,6 +239,7 @@ func UpdateVersionHandler(c *gin.Context) {
 		ReleaseURL:     release.HTMLURL,
 		ReleaseName:    release.Name,
 		ReleaseBody:    release.Body,
+		ProxyURLs:      append([]string(nil), PROXIES...),
 	}
 
 	if assetErr == nil && asset != nil {
@@ -260,11 +277,15 @@ func updateHTTPClient() *http.Client {
 }
 
 func updateTryURLs(originalURL string) []string {
+	return buildUpdateTryURLs(originalURL, PROXIES)
+}
+
+func buildUpdateTryURLs(originalURL string, proxies []string) []string {
 	trimmedURL := strings.TrimPrefix(originalURL, "https://")
 	trimmedURL = strings.TrimPrefix(trimmedURL, "http://")
 
-	urls := make([]string, 0, len(PROXIES)+1)
-	for _, proxy := range PROXIES {
+	urls := make([]string, 0, len(proxies)+1)
+	for _, proxy := range proxies {
 		proxy = strings.TrimSpace(proxy)
 		if proxy == "" {
 			continue
@@ -276,6 +297,27 @@ func updateTryURLs(originalURL string) []string {
 	}
 	urls = append(urls, originalURL)
 	return urls
+}
+
+func normalizeUpdateProxy(rawProxy string) (string, error) {
+	proxy := strings.TrimSpace(rawProxy)
+	if proxy == "" {
+		return "", nil
+	}
+	if !strings.HasPrefix(proxy, "http://") && !strings.HasPrefix(proxy, "https://") {
+		proxy = "https://" + proxy
+	}
+	parsed, err := url.Parse(proxy)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("代理 URL 格式不正确")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("代理 URL 只支持 http 或 https")
+	}
+	if !strings.HasSuffix(proxy, "/") {
+		proxy += "/"
+	}
+	return proxy, nil
 }
 
 func updateAttemptStatus(rawURL string, originalURL string) {
@@ -303,13 +345,16 @@ func updateAttemptStatus(rawURL string, originalURL string) {
 }
 
 // downloadFile 代理优先，GitHub 直连兜底，并记录下载进度。
-func downloadFile(downloadURL string, savePath string, totalHint int64) error {
+func downloadFile(ctx context.Context, downloadURL string, savePath string, totalHint int64, proxies []string) error {
 	var lastErr error
 	client := updateHTTPClient()
-	for _, u := range updateTryURLs(downloadURL) {
+	for _, u := range buildUpdateTryURLs(downloadURL, proxies) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		updateAttemptStatus(u, downloadURL)
 
-		req, err := http.NewRequest(http.MethodGet, u, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 		if err != nil {
 			lastErr = err
 			continue
@@ -319,6 +364,9 @@ func downloadFile(downloadURL string, savePath string, totalHint int64) error {
 
 		resp, err := client.Do(req)
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			lastErr = err
 			setUpdateStatus(func(status *UpdateDownloadStatus) {
 				status.Msg = "当前线路 3 秒内未连上或连接失败，正在尝试下一线路"
@@ -355,6 +403,11 @@ func downloadFile(downloadURL string, savePath string, totalHint int64) error {
 		buf := make([]byte, 64*1024)
 		var downloaded int64
 		for {
+			if err := ctx.Err(); err != nil {
+				_ = out.Close()
+				resp.Body.Close()
+				return err
+			}
 			n, readErr := resp.Body.Read(buf)
 			if n > 0 {
 				written, writeErr := out.Write(buf[:n])
@@ -502,7 +555,9 @@ func UpdateStatusHandler(c *gin.Context) {
 	})
 }
 
-func runUpdateTask(asset *GithubAsset, latestVersion string, releaseURL string) {
+func runUpdateTask(ctx context.Context, cancel context.CancelFunc, asset *GithubAsset, latestVersion string, releaseURL string, proxies []string) {
+	defer clearUpdateCancel()
+
 	currentBin, err := os.Executable()
 	if err != nil {
 		setUpdateStatus(func(status *UpdateDownloadStatus) {
@@ -524,11 +579,18 @@ func runUpdateTask(asset *GithubAsset, latestVersion string, releaseURL string) 
 	tmpNewBin := filepath.Join(os.TempDir(), fmt.Sprintf("webssh_%s_%s.new", runtime.GOARCH, latestVersion))
 	logFile := filepath.Join(os.TempDir(), "webssh_update.log")
 
-	if err := downloadFile(asset.BrowserDownloadURL, tmpNewBin, asset.Size); err != nil {
+	if err := downloadFile(ctx, asset.BrowserDownloadURL, tmpNewBin, asset.Size, proxies); err != nil {
 		setUpdateStatus(func(status *UpdateDownloadStatus) {
+			if errors.Is(err, context.Canceled) {
+				status.State = "canceled"
+				status.Msg = "用户已取消下载"
+				status.Percent = 0
+				return
+			}
 			status.State = "failed"
 			status.Msg = "下载新版本失败: " + err.Error()
 		})
+		_ = os.Remove(tmpNewBin)
 		return
 	}
 
@@ -566,6 +628,10 @@ func runUpdateTask(asset *GithubAsset, latestVersion string, releaseURL string) 
 	})
 }
 
+type UpdateRunRequest struct {
+	ProxyURL string `json:"proxy_url"`
+}
+
 func UpdateRunHandler(c *gin.Context) {
 	if isUpdateBusy() {
 		c.JSON(http.StatusOK, gin.H{
@@ -574,6 +640,28 @@ func UpdateRunHandler(c *gin.Context) {
 			"data": getUpdateStatus(),
 		})
 		return
+	}
+
+	var runReq UpdateRunRequest
+	if err := c.ShouldBindJSON(&runReq); err != nil && !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusOK, gin.H{
+			"code": 1,
+			"msg":  "更新参数错误: " + err.Error(),
+		})
+		return
+	}
+
+	updateProxies := append([]string(nil), PROXIES...)
+	proxyURL, err := normalizeUpdateProxy(runReq.ProxyURL)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"code": 1,
+			"msg":  err.Error(),
+		})
+		return
+	}
+	if proxyURL != "" {
+		updateProxies = []string{proxyURL}
 	}
 
 	release, err := getLatestGithubRelease()
@@ -622,11 +710,47 @@ func UpdateRunHandler(c *gin.Context) {
 		}
 	})
 
-	go runUpdateTask(asset, latestVersion, release.HTMLURL)
+	ctx, cancel := context.WithCancel(context.Background())
+	setUpdateCancel(cancel)
+	go runUpdateTask(ctx, cancel, asset, latestVersion, release.HTMLURL, updateProxies)
 
 	c.JSON(http.StatusOK, gin.H{
 		"code": 0,
 		"msg":  "已开始下载更新文件",
+		"data": getUpdateStatus(),
+	})
+}
+
+func UpdateCancelHandler(c *gin.Context) {
+	state := getUpdateStatus().State
+	if state != "starting" && state != "downloading" {
+		c.JSON(http.StatusOK, gin.H{
+			"code": 1,
+			"msg":  "当前更新状态不可取消",
+			"data": getUpdateStatus(),
+		})
+		return
+	}
+
+	updateCancelMu.Lock()
+	cancel := updateCancel
+	updateCancelMu.Unlock()
+	if cancel == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"code": 1,
+			"msg":  "没有可取消的下载任务",
+			"data": getUpdateStatus(),
+		})
+		return
+	}
+
+	cancel()
+	setUpdateStatus(func(status *UpdateDownloadStatus) {
+		status.Msg = "正在取消下载"
+	})
+	c.JSON(http.StatusOK, gin.H{
+		"code": 0,
+		"msg":  "已取消下载",
 		"data": getUpdateStatus(),
 	})
 }
@@ -813,6 +937,7 @@ func main() {
 		auth.GET("/api/update/version", UpdateVersionHandler)
 		auth.GET("/api/update/status", UpdateStatusHandler)
 		auth.POST("/api/update/run", UpdateRunHandler)
+		auth.POST("/api/update/cancel", UpdateCancelHandler)
 	}
 	{
 		// 开启 ADB 等调试端口

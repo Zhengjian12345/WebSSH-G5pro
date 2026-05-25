@@ -118,8 +118,8 @@
 
                   <!-- admin 角色才能管理 -->
                   <el-button v-if="globalStore.isAdmin === 'Y'" type="danger" :icon="Tools" @click="toManage"></el-button>
-                  <el-popconfirm confirmButtonText="退出" cancelButtonText="取消" icon="el-icon-info" iconColor="red"
-                    title="确定退出吗" @confirm="logout">
+                  <el-popconfirm confirmButtonText="重启" cancelButtonText="取消" icon="el-icon-info" iconColor="red"
+                    title="确定重启设备吗？" @confirm="rebootDevice">
                     <template #reference>
                       <el-button :icon="SwitchButton" type="danger"></el-button>
                     </template>
@@ -884,6 +884,12 @@ interface ResponseData {
   code: number;
   msg: string;
   data?: any;
+}
+
+interface ZteRpcResponse {
+  jsonrpc: string;
+  id: number;
+  result: [number, any];
 }
 
 /**
@@ -2762,6 +2768,31 @@ function logout() {
 
   // 5. 跳转登录页
   router.replace({ name: "Login" });
+}
+
+function rebootDevice() {
+  axios.post<ZteRpcResponse[]>("/api/ubus", [{
+    jsonrpc: "2.0",
+    id: 1,
+    method: "call",
+    params: [
+      "00000000000000000000000000000000",
+      "zwrt_mc.device.manager",
+      "device_reboot",
+      { moduleName: "web" },
+    ],
+  }]).then((ret) => {
+    const item = ret.data?.[0];
+    const [code, msg] = item?.result || [1, "接口返回异常"];
+    if (code === 0) {
+      ElMessage.success("设备重启命令已发送");
+    } else {
+      ElMessage.error(typeof msg === "string" ? msg : "设备重启失败");
+    }
+  }).catch((err) => {
+    console.log(err);
+    ElMessage.error("设备重启请求失败");
+  });
 }
 
 function disableAutoLogin() {

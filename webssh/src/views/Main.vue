@@ -1322,15 +1322,15 @@
         </transition>
 
         <!-- 开机自启 -->
-        <div class="mh-autostart-row">
+        <div v-if="mihomoStatus.binary_version" class="mh-autostart-row">
           <span class="mh-info-label">开机自启</span>
           <el-switch
-            v-model="mihomoStatus.autostart_enabled"
-            :loading="mihomoAutostartChanging"
-            active-text="已开启"
-            inactive-text="已关闭"
-            @change="(v: boolean) => setMihomoAutostart(v)"
-          />
+              v-model="mihomoStatus.autostart_enabled"
+              :loading="mihomoAutostartChanging"
+              active-text="已开启"
+              inactive-text="已关闭"
+              @change="(v: boolean) => setMihomoAutostart(v)"
+            />
           <span class="mh-meta">webssh 启动时自动运行 mihomo</span>
         </div>
       </el-tab-pane>

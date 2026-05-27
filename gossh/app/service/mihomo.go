@@ -375,8 +375,17 @@ func checkMihomoAPI(configPath string) (reachable bool, version string) {
 	if extCtrl == "" {
 		return false, ""
 	}
-	u, _ := url.Parse(extCtrl)
-	reqURL := "http://" + u.Host + "/version"
+	u, err := url.Parse(extCtrl)
+	if err != nil || u == nil {
+		return false, ""
+	}
+	host := u.Host
+	if host == "" {
+		// extCtrl 没有 scheme，url.Parse 把 host 解析进了 Scheme/Opaque
+		// 直接把整段当 host:port 用
+		host = strings.SplitN(extCtrl, "/", 2)[0]
+	}
+	reqURL := "http://" + host + "/version"
 	req, err := http.NewRequest(http.MethodGet, reqURL, nil)
 	if err != nil {
 		return false, ""
@@ -529,7 +538,7 @@ func MihomoDataVersionHandler(c *gin.Context) {
 		"data": gin.H{
 			"remote_version": remoteVersion,
 			"local_version":  localVersion,
-			"has_update":     remoteVersion != "" && strings.Contains(localVersion, remoteVersion),
+			"has_update":     remoteVersion != "" && !strings.Contains(localVersion, remoteVersion),
 		},
 	})
 }

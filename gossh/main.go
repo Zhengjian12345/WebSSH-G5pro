@@ -842,6 +842,7 @@ func initApplication() {
 	service.InitSessionClean()
 	service.InitSshServer()
 	service.InitMihomoAutostart()
+	service.InitWifiSettingsAutostart()
 	fmt.Printf("WebBaseDir:[%s]\n", config.DefaultConfig.WebBaseDir)
 }
 

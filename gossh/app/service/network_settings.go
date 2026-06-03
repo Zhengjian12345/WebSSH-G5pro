@@ -33,14 +33,6 @@ var allowed5GBands = map[int]bool{
 }
 
 type PersistedDeviceSettings struct {
-	NetSelect       string `json:"net_select"`
-	LTEBands        []int  `json:"lte_bands"`
-	NRBands         []int  `json:"nr_bands"`
-	LockLTEPCI      string `json:"lock_lte_pci"`
-	LockLTEEARFCN   string `json:"lock_lte_earfcn"`
-	LockNRPCI       string `json:"lock_nr_pci"`
-	LockNREARFCN    string `json:"lock_nr_earfcn"`
-	LockNRBand      string `json:"lock_nr_band"`
 	Wifi24Enabled   *bool  `json:"wifi24_enabled,omitempty"`
 	Wifi5Enabled    *bool  `json:"wifi5_enabled,omitempty"`
 	WifiTxPower     string `json:"wifi_txpower"`
@@ -270,8 +262,8 @@ func sanitizeWifiAttrs(attrs map[string]string) (map[string]interface{}, error) 
 		switch key {
 		case "txpowerpercent":
 			n, err := strconv.Atoi(value)
-			if err != nil || n < 1 || n > 100 {
-				return nil, fmt.Errorf("WiFi 发射功率必须是 1-100")
+			if err != nil || (n != 40 && n != 80 && n != 100) {
+				return nil, fmt.Errorf("WiFi 发射功率只能是 40、80、100")
 			}
 		case "country":
 			if !regexp.MustCompile(`^[A-Za-z]{2}$`).MatchString(value) {
@@ -287,19 +279,25 @@ func sanitizeWifiAttrs(attrs map[string]string) (map[string]interface{}, error) 
 }
 
 func validatePersistedSettings(s PersistedDeviceSettings) error {
-	if s.NetSelect != "" && !validNetSelect[s.NetSelect] {
-		return fmt.Errorf("网络模式不合法")
-	}
-	if _, err := lteBandMask(s.LTEBands); err != nil {
-		return err
-	}
-	if _, err := nrBandString(s.NRBands); err != nil {
-		return err
-	}
-	for _, v := range []string{s.LockLTEPCI, s.LockLTEEARFCN, s.LockNRPCI, s.LockNREARFCN, s.LockNRBand} {
-		if v != "" && !isNumericOrZero(v) {
-			return fmt.Errorf("小区锁定参数必须是数字")
+	for _, v := range []string{s.WifiTxPower, s.Wifi24TxPower, s.Wifi5TxPower} {
+		if v == "" {
+			continue
 		}
+		n, err := strconv.Atoi(v)
+		if err != nil || (n != 40 && n != 80 && n != 100) {
+			return fmt.Errorf("WiFi 发射功率只能是 40、80、100")
+		}
+	}
+	for _, v := range []string{s.WifiCountry, s.Wifi24Country, s.Wifi5Country} {
+		if v == "" {
+			continue
+		}
+		if !regexp.MustCompile(`^[A-Za-z]{2}$`).MatchString(v) {
+			return fmt.Errorf("WiFi 国家码必须是 2 位字母")
+		}
+	}
+	if s.WifiPerformance != "" && s.WifiPerformance != "high" && s.WifiPerformance != "power_save" {
+		return fmt.Errorf("WiFi 性能模式不合法")
 	}
 	return nil
 }

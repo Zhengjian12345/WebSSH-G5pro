@@ -1310,7 +1310,7 @@
         </el-checkbox-group>
         <div class="settings-actions">
           <el-button size="small" @click="lockCurrentLTEBands">锁当前频段</el-button>
-          <el-button size="small" @click="networkForm.lte_bands = []">自动</el-button>
+          <el-button size="small" @click="selectAllLTEBands">自动</el-button>
           <el-button size="small" type="primary" :loading="networkApplying === 'lteBand'" @click="applyLTEBandLock">应用 4G 锁频</el-button>
         </div>
       </section>
@@ -1322,7 +1322,7 @@
         </el-checkbox-group>
         <div class="settings-actions">
           <el-button size="small" @click="lockCurrentNRBands">锁当前频段</el-button>
-          <el-button size="small" @click="networkForm.nr_bands = []">自动</el-button>
+          <el-button size="small" @click="selectAllNRBands">自动</el-button>
           <el-button size="small" type="primary" :loading="networkApplying === 'nrBand'" @click="applyNRBandLock">应用 5G 锁频</el-button>
         </div>
       </section>
@@ -1356,7 +1356,6 @@
     </div>
     <template #footer>
       <el-button @click="networkSettingsDialogVisible = false">关闭</el-button>
-      <el-button type="primary" :loading="settingsSaving" @click="saveDeviceSettings">保存用户设置</el-button>
     </template>
   </el-dialog>
 
@@ -1378,8 +1377,7 @@
           <el-switch
             v-model="wifiForm.wifi24_enabled"
             active-text="开启"
-            inactive-text="关闭"
-            @change="(v: boolean) => wifiStateSetHandler('wlan0', v)" />
+            inactive-text="关闭" />
         </section>
         <section class="settings-section wifi-radio-card">
           <div>
@@ -1389,8 +1387,7 @@
           <el-switch
             v-model="wifiForm.wifi5_enabled"
             active-text="开启"
-            inactive-text="关闭"
-            @change="(v: boolean) => wifiStateSetHandler('wlan2', v)" />
+            inactive-text="关闭" />
         </section>
       </div>
       <section class="settings-section">
@@ -1414,7 +1411,18 @@
               <span class="settings-section-title">发射功率</span>
               <span class="wifi-value-pill">{{ wifiForm.txpower }}%</span>
             </div>
-            <el-slider v-model="wifiForm.txpower" :min="1" :max="100" :step="1" />
+            <div class="wifi-distance-options">
+              <button
+                v-for="opt in wifiTxPowerOptions"
+                :key="opt.value"
+                class="wifi-distance-option"
+                :class="{ active: wifiForm.txpower === opt.value }"
+                type="button"
+                @click="wifiForm.txpower = opt.value">
+                <span>{{ opt.label }}</span>
+                <small>{{ opt.value }}%</small>
+              </button>
+            </div>
           </div>
           <div class="wifi-tuning-item">
             <div class="settings-title-row">
@@ -1429,15 +1437,10 @@
           </div>
         </div>
       </section>
-
-      <div class="settings-actions">
-        <el-button @click="loadWifiSettings">重新读取</el-button>
-        <el-button type="primary" :loading="wifiSettingsSaving === 'settings'" @click="applyWifiSettings">应用 WiFi 参数</el-button>
-      </div>
     </div>
     <template #footer>
       <el-button @click="wifiSettingsDialogVisible = false">关闭</el-button>
-      <el-button type="primary" :loading="settingsSaving" @click="saveDeviceSettings">保存用户设置</el-button>
+      <el-button type="primary" :loading="wifiSettingsSaving === 'all'" @click="saveAndApplyWifiSettings">保存并应用</el-button>
     </template>
   </el-dialog>
 
@@ -1886,19 +1889,16 @@ const netSelectOptions = [
 ]
 const lteBandOptions = [1,2,3,4,5,7,8,18,19,20,26,28,29,32,34,38,39,40,41,42,43,48,66,71];
 const nrBandOptions = [1,2,3,5,7,8,18,20,26,28,29,38,40,41,48,66,71,75,77,78,79];
+const wifiTxPowerOptions = [
+  { value: 40, label: '近距离' },
+  { value: 80, label: '中距离' },
+  { value: 100, label: '远距离' },
+];
 
 type NetworkApplyTarget = '' | 'mode' | 'lteBand' | 'nrBand' | 'lteCell' | 'nrCell';
-type WifiApplyTarget = '' | 'psm' | 'settings';
+type WifiApplyTarget = '' | 'psm' | 'settings' | 'all';
 
 interface DeviceSettings {
-  net_select: string;
-  lte_bands: number[];
-  nr_bands: number[];
-  lock_lte_pci: string;
-  lock_lte_earfcn: string;
-  lock_nr_pci: string;
-  lock_nr_earfcn: string;
-  lock_nr_band: string;
   wifi24_enabled?: boolean;
   wifi5_enabled?: boolean;
   wifi_txpower: string;
@@ -1914,7 +1914,6 @@ const networkSettingsDialogVisible = ref(false);
 const wifiSettingsDialogVisible = ref(false);
 const networkApplying = ref<NetworkApplyTarget>('');
 const wifiSettingsSaving = ref<WifiApplyTarget>('');
-const settingsSaving = ref(false);
 
 const networkForm = reactive({
   net_select: '',
@@ -1934,6 +1933,11 @@ const wifiForm = reactive({
   txpower: 100,
   country: '',
 });
+
+function normalizeWifiTxPower(value: unknown): number {
+  const n = Number(value);
+  return wifiTxPowerOptions.some(item => item.value === n) ? n : 100;
+}
 
 const networkSettingsSummary = computed(() => {
   const opt = netSelectOptions.find(item => item.value === (networkForm.net_select || d.value?.net_select));
@@ -2432,7 +2436,8 @@ async function netSelectChange(value: string) {
   await applyNetworkMode();
 }
 
-function openNetworkSettingsDialog() {
+async function openNetworkSettingsDialog() {
+  await fetchAllData();
   syncNetworkFormFromCurrent();
   networkSettingsDialogVisible.value = true;
 }
@@ -2444,9 +2449,11 @@ function openWifiSettingsDialog() {
 }
 
 function syncNetworkFormFromCurrent() {
-  networkForm.net_select = networkForm.net_select || d.value?.net_select || '';
-  if (networkForm.lock_lte_pci === '') fillCurrentLTECell(false);
-  if (networkForm.lock_nr_pci === '') fillCurrentNRCell(false);
+  networkForm.net_select = d.value?.net_select || '';
+  networkForm.lte_bands = parseBandList(d.value?.lte_band, lteBandOptions);
+  networkForm.nr_bands = parseBandList(currentNRBandLockValue(), nrBandOptions);
+  syncLTECellLockFromCurrent();
+  syncNRCellLockFromCurrent();
 }
 
 function syncWifiFormFromCurrent() {
@@ -2480,6 +2487,20 @@ function parseBandsFromCarrierString(raw: unknown, bandIndex: number): number[] 
   return [...new Set(bands)];
 }
 
+function parseBandList(raw: unknown, allowed: number[]): number[] {
+  if (!raw || typeof raw !== 'string') return [];
+  return [...new Set(raw
+    .split(',')
+    .map(item => Number(String(item).trim().replace(/^[bn]/i, '')))
+    .filter(band => Number.isFinite(band) && allowed.includes(band)))];
+}
+
+function currentNRBandLockValue(): unknown {
+  const type = String(d.value?.network_type || '').toUpperCase();
+  if (type === 'NSA') return d.value?.nr5g_nsa_band_lock;
+  return d.value?.nr5g_sa_band_lock || d.value?.nr5g_nsa_band_lock;
+}
+
 function getCurrentLTEBands(): number[] {
   return parseBandsFromCarrierString(d.value?.lteca, 1)
     .filter(band => lteBandOptions.includes(band));
@@ -2501,6 +2522,10 @@ function lockCurrentLTEBands() {
   networkForm.lte_bands = bands;
 }
 
+function selectAllLTEBands() {
+  networkForm.lte_bands = [...lteBandOptions];
+}
+
 function lockCurrentNRBands() {
   const bands = getCurrentNRBands();
   if (!bands.length) {
@@ -2510,12 +2535,16 @@ function lockCurrentNRBands() {
   networkForm.nr_bands = bands;
 }
 
+function selectAllNRBands() {
+  networkForm.nr_bands = [...nrBandOptions];
+}
+
 async function applyLTEBandLock() {
   networkApplying.value = 'lteBand';
   try {
     const res = await axios.post('/api/network/band/lte', { bands: networkForm.lte_bands });
     if (res.data.code !== 0) throw new Error(res.data.msg || '4G 锁频失败');
-    ElMessage.success(networkForm.lte_bands.length ? '4G 锁频已应用' : '4G 锁频已取消');
+    ElMessage.success(networkForm.lte_bands.length === lteBandOptions.length ? '4G 已切换为自动频段' : '4G 锁频已应用');
     fetchAllData();
   } catch (err: any) {
     ElMessage.error(err.message || '4G 锁频失败');
@@ -2529,7 +2558,7 @@ async function applyNRBandLock() {
   try {
     const res = await axios.post('/api/network/band/nr', { bands: networkForm.nr_bands });
     if (res.data.code !== 0) throw new Error(res.data.msg || '5G 锁频失败');
-    ElMessage.success(networkForm.nr_bands.length ? '5G 锁频已应用' : '5G 锁频已取消');
+    ElMessage.success(networkForm.nr_bands.length === nrBandOptions.length ? '5G 已切换为自动频段' : '5G 锁频已应用');
     fetchAllData();
   } catch (err: any) {
     ElMessage.error(err.message || '5G 锁频失败');
@@ -2544,11 +2573,29 @@ function fillCurrentLTECell(showMessage = true) {
   if (showMessage) ElMessage.success('已填入当前 4G 小区');
 }
 
+function syncLTECellLockFromCurrent() {
+  const values = parseCellLockValue(d.value?.lock_lte_cell);
+  networkForm.lock_lte_pci = values[0] || '';
+  networkForm.lock_lte_earfcn = values[1] || '';
+}
+
 function fillCurrentNRCell(showMessage = true) {
   networkForm.lock_nr_pci = String(d.value?.nr5g_pci || formatNrca(d.value?.nrca, '', 0, 1) || '').replace('-', '');
   networkForm.lock_nr_earfcn = String(d.value?.nr5g_action_channel || formatNrca(d.value?.nrca, '', 0, 4) || '').replace('-', '');
   networkForm.lock_nr_band = String(d.value?.nr5g_action_band || formatNrca(d.value?.nrca, '', 0, 3) || '').replace(/^n/i, '').replace('-', '');
   if (showMessage) ElMessage.success('已填入当前 5G 小区');
+}
+
+function syncNRCellLockFromCurrent() {
+  const values = parseCellLockValue(d.value?.lock_nr_cell);
+  networkForm.lock_nr_pci = values[0] || '';
+  networkForm.lock_nr_earfcn = values[1] || '';
+  networkForm.lock_nr_band = values[2] || '';
+}
+
+function parseCellLockValue(raw: unknown): string[] {
+  if (!raw || typeof raw !== 'string') return [];
+  return raw.match(/\d+/g) || [];
 }
 
 function clearLTECell() {
@@ -2607,7 +2654,7 @@ async function loadWifiSettings() {
     if (res.data.code !== 0) return;
     const wifi0 = valuesFromUci(res.data.data?.wifi0);
     const wifi1 = valuesFromUci(res.data.data?.wifi1);
-    wifiForm.txpower = Number(wifi0.txpowerpercent || wifi1.txpowerpercent || wifiForm.txpower || 100);
+    wifiForm.txpower = normalizeWifiTxPower(wifi0.txpowerpercent || wifi1.txpowerpercent || wifiForm.txpower || 100);
     wifiForm.country = wifi0.country || wifi1.country || wifiForm.country;
   } catch {
     // U60Pro 外的开发环境可能没有 ubus，这里保持静默。
@@ -2642,16 +2689,55 @@ async function applyWifiSettings() {
   }
 }
 
+async function setWifiPerformance(highPerformance: boolean) {
+  const res = await axios.post('/api/wifi/psm/set', {
+    ifaces: ['wlan0', 'wlan1', 'wlan2', 'wlan3'],
+    mode: highPerformance ? 'off' : 'on',
+  });
+  if (res.data.code !== 0) throw new Error(res.data.msg || 'WiFi 性能模式应用失败');
+}
+
+async function setWifiRadioState(iface: string, up: boolean) {
+  const res = await axios.post('/api/wifi/state/set', {
+    ifaces: [iface],
+    up,
+  });
+  if (res.data.code !== 0) throw new Error(res.data.msg || 'WiFi 开关应用失败');
+}
+
+async function setWifiUciSettings() {
+  const res = await axios.post('/api/wifi/settings', {
+    wifi0: wifiAttrs(wifiForm.txpower, wifiForm.country),
+    wifi1: wifiAttrs(wifiForm.txpower, wifiForm.country),
+  });
+  if (res.data.code !== 0) throw new Error(res.data.msg || 'WiFi 参数应用失败');
+}
+
+async function persistDeviceSettings() {
+  const res = await axios.put('/api/device/settings', buildDeviceSettings());
+  if (res.data.code !== 0) throw new Error(res.data.msg || '保存用户设置失败');
+}
+
+async function saveAndApplyWifiSettings() {
+  wifiSettingsSaving.value = 'all';
+  try {
+    await setWifiPerformance(wifiForm.high_performance);
+    await setWifiRadioState('wlan0', wifiForm.wifi24_enabled);
+    await setWifiRadioState('wlan2', wifiForm.wifi5_enabled);
+    await setWifiUciSettings();
+    await persistDeviceSettings();
+    psmGetHandler();
+    loadWifiSettings();
+    ElMessage.success('WiFi 设置已保存并应用');
+  } catch (err: any) {
+    ElMessage.error(err.message || 'WiFi 设置应用失败');
+  } finally {
+    wifiSettingsSaving.value = '';
+  }
+}
+
 function buildDeviceSettings(): DeviceSettings {
   return {
-    net_select: networkForm.net_select,
-    lte_bands: [...networkForm.lte_bands],
-    nr_bands: [...networkForm.nr_bands],
-    lock_lte_pci: networkForm.lock_lte_pci,
-    lock_lte_earfcn: networkForm.lock_lte_earfcn,
-    lock_nr_pci: networkForm.lock_nr_pci,
-    lock_nr_earfcn: networkForm.lock_nr_earfcn,
-    lock_nr_band: networkForm.lock_nr_band,
     wifi24_enabled: wifiForm.wifi24_enabled,
     wifi5_enabled: wifiForm.wifi5_enabled,
     wifi_txpower: String(wifiForm.txpower),
@@ -2664,35 +2750,14 @@ function buildDeviceSettings(): DeviceSettings {
   };
 }
 
-async function saveDeviceSettings() {
-  settingsSaving.value = true;
-  try {
-    const res = await axios.put('/api/device/settings', buildDeviceSettings());
-    if (res.data.code !== 0) throw new Error(res.data.msg || '保存用户设置失败');
-    ElMessage.success('用户设置已保存');
-  } catch (err: any) {
-    ElMessage.error(err.message || '保存用户设置失败');
-  } finally {
-    settingsSaving.value = false;
-  }
-}
-
 async function loadDeviceSettings() {
   try {
     const res = await axios.get('/api/device/settings');
     if (res.data.code !== 0 || !res.data.data) return;
     const saved = res.data.data as Partial<DeviceSettings>;
-    networkForm.net_select = saved.net_select || networkForm.net_select;
-    networkForm.lte_bands = saved.lte_bands || [];
-    networkForm.nr_bands = saved.nr_bands || [];
-    networkForm.lock_lte_pci = saved.lock_lte_pci || '';
-    networkForm.lock_lte_earfcn = saved.lock_lte_earfcn || '';
-    networkForm.lock_nr_pci = saved.lock_nr_pci || '';
-    networkForm.lock_nr_earfcn = saved.lock_nr_earfcn || '';
-    networkForm.lock_nr_band = saved.lock_nr_band || '';
     wifiForm.wifi24_enabled = saved.wifi24_enabled ?? wifiForm.wifi24_enabled;
     wifiForm.wifi5_enabled = saved.wifi5_enabled ?? wifiForm.wifi5_enabled;
-    wifiForm.txpower = Number(saved.wifi_txpower || saved.wifi24_txpower || saved.wifi5_txpower || wifiForm.txpower || 100);
+    wifiForm.txpower = normalizeWifiTxPower(saved.wifi_txpower || saved.wifi24_txpower || saved.wifi5_txpower || wifiForm.txpower || 100);
     wifiForm.country = saved.wifi_country || saved.wifi24_country || saved.wifi5_country || '';
     wifiForm.high_performance = saved.wifi_performance === 'high';
   } catch {
@@ -5323,6 +5388,16 @@ onUnmounted(() => {
      scoped CSS 的 data-v 属性无法可靠传递到弹窗内部。 -->
 <style>
 .wireless-dialog.el-dialog {
+  --el-text-color-primary: rgba(255, 255, 255, 0.92);
+  --el-text-color-regular: rgba(255, 255, 255, 0.82);
+  --el-text-color-placeholder: rgba(255, 255, 255, 0.45);
+  --el-fill-color-blank: rgba(255, 255, 255, 0.08);
+  --el-border-color: rgba(255, 255, 255, 0.18);
+  --el-border-color-hover: rgba(255, 255, 255, 0.38);
+  --el-input-bg-color: rgba(255, 255, 255, 0.08);
+  --el-input-border-color: rgba(255, 255, 255, 0.18);
+  --el-input-hover-border-color: rgba(255, 255, 255, 0.38);
+  --el-input-focus-border-color: rgba(96, 165, 250, 0.9);
   background: linear-gradient(135deg, #1e3c72 0%, #2a5298 60%, #3b82f6 100%) !important;
   border: 1px solid rgba(255, 255, 255, 0.3) !important;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4) !important;
@@ -6009,6 +6084,51 @@ onUnmounted(() => {
   gap: 8px;
 }
 
+.wifi-distance-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.wifi-distance-option {
+  min-width: 0;
+  height: 46px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.07);
+  color: rgba(255, 255, 255, 0.76);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-weight: 800;
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.wifi-distance-option small {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.wifi-distance-option:hover {
+  border-color: rgba(96, 165, 250, 0.7);
+  background: rgba(96, 165, 250, 0.14);
+  color: #ffffff;
+}
+
+.wifi-distance-option.active {
+  border-color: rgba(96, 165, 250, 0.95);
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.95), rgba(14, 165, 233, 0.9));
+  color: #ffffff;
+}
+
+.wifi-distance-option.active small {
+  color: rgba(255, 255, 255, 0.86);
+}
+
 .wireless-dialog .settings-panel .el-switch__label {
   color: rgba(255, 255, 255, 0.5);
 }
@@ -6104,6 +6224,30 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.wireless-dialog .settings-panel .el-input__wrapper {
+  background: rgba(10, 31, 68, 0.24);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: none;
+}
+
+.wireless-dialog .settings-panel .el-input__wrapper:hover {
+  border-color: rgba(255, 255, 255, 0.34);
+  box-shadow: none;
+}
+
+.wireless-dialog .settings-panel .el-input__wrapper.is-focus {
+  border-color: rgba(96, 165, 250, 0.9);
+  box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.25);
+}
+
+.wireless-dialog .settings-panel .el-input__inner {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.wireless-dialog .settings-panel .el-input__inner::placeholder {
+  color: rgba(255, 255, 255, 0.45);
 }
 
 .wifi-settings-grid .settings-section {

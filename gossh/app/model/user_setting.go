@@ -16,6 +16,12 @@ func (s UserSetting) FindByUid(uid uint) (UserSetting, error) {
 	return setting, err
 }
 
+func (s UserSetting) FindLatestNonEmpty() (UserSetting, error) {
+	var setting UserSetting
+	err := Db.Where("value <> ?", "").Order("updated_at desc").First(&setting).Error
+	return setting, err
+}
+
 func (s UserSetting) SaveForUid(uid uint, value string) error {
 	var setting UserSetting
 	err := Db.First(&setting, "uid = ?", uid).Error

@@ -845,14 +845,15 @@ func MihomoCheckBinaryVersionHandler(c *gin.Context) {
 
 	remoteTag := extractMihomoVersionTag(remoteVersion)
 	localTag := extractMihomoVersionTag(localVersion)
+	installed := strings.TrimSpace(localVersion) != ""
 
-	// 只有当能从两边都提取出版本号且不相等时，才认为有更新；
-	// 任何一边为空都视为"未知"，不报 has_update（避免空 local 永远触发更新提示）。
-	hasUpdate := remoteTag != "" && localTag != "" && remoteTag != localTag
+	// 未安装时应提示可安装；已安装时只有两边都能提取版本且不同才提示更新。
+	hasUpdate := !installed || (remoteTag != "" && localTag != "" && remoteTag != localTag)
 
 	c.JSON(200, gin.H{
 		"code": 0, "msg": "ok",
 		"data": gin.H{
+			"installed":      installed,
 			"local_version":  localVersion,
 			"remote_version": remoteVersion,
 			"local_tag":      localTag,

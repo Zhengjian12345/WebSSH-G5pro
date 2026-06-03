@@ -87,51 +87,28 @@
               </span>
             </button>
 
-          <label class="quick-action-button" style="padding: 1px 10px;">
+          <button class="quick-action-button" style="padding: 1px 10px;" @click="openNetworkSettingsDialog">
             <span class="quick-action-icon">Net</span>
-
             <span class="quick-action-copy">
-              <span class="quick-action-title" style="font-size: 13px;">数据模式</span>
-
-              <el-select
-                class="net-select"
-                popper-class="net-select-popper"
-                v-model="d.net_select"
-                placeholder="未知"
-                @change="netSelectChange"
-              >
-                <el-option
-                  v-for="opt in netSelectOptions"
-                  :key="opt.value"
-                  :label="opt.label"
-                  :value="opt.value"
-                />
-              </el-select>
+              <span class="quick-action-title" style="font-size: 13px;">网络设置</span>
+              <span class="quick-action-subtitle">{{ networkSettingsSummary }}</span>
             </span>
-          </label>
+          </button>
 
           <button
             class="wifi-mode-button"
-            :class="{ active: wifiInfo.highPerformance, saving: wifiPsmSaving }"
-            :disabled="wifiPsmSaving"
-            @click="psmSetHandler(!wifiInfo.highPerformance)"
+            :class="{ active: wifiInfo.highPerformance, saving: wifiSettingsSaving }"
+            :disabled="wifiSettingsSaving !== ''"
+            @click="openWifiSettingsDialog"
           >
             <span class="wifi-mode-icon">{{ wifiInfo.highPerformance ? 'HP' : 'PS' }}</span>
             <span class="wifi-mode-copy">
-              <span class="wifi-mode-title">WiFi {{ wifiModeText }}</span>
-              <span class="wifi-mode-action">{{ wifiPsmSaving ? '切换中...' : wifiButtonText }}</span>
+              <span class="wifi-mode-title">WiFi 设置</span>
+              <span class="wifi-mode-action">{{ wifiSettingsSummary }}</span>
             </span>
           </button>
         </div>
 
-        <div v-if="wifiStatus?.main2g_ssid !== wifiStatus?.main5g_ssid" class="auto-refresh-controls" style="display: flex;align-items: center;gap: 10px;flex-wrap: wrap;">
-          2.4G-WIFI: {{wifiInfo.wifiStatus24?'开':'关'}}
-          <button style="margin-left: 1px;" class="btn" :class="wifiInfo.wifiStatus24 ? 'btn-primary' : 'btn-primary'"
-                  @click="wifiStateSetHandler('wlan0',!wifiInfo.wifiStatus24)">{{wifiInfo.wifiStatus24?'关闭':'开启'}}</button>
-          5G-WIFI: {{wifiInfo.wifiStatus5?'开':'关'}}
-          <button style="margin-left: 1px;" class="btn" :class="wifiInfo.wifiStatus5 ? 'btn-primary' : 'btn-primary'"
-                  @click="wifiStateSetHandler('wlan2',!wifiInfo.wifiStatus5)">{{wifiInfo.wifiStatus5?'关闭':'开启'}}</button>
-        </div>
       </div>
     </div>
 
@@ -806,61 +783,6 @@
               </div>
             </div>
 
-            <!-- <div class="device-item">
-              <div class="device-label">
-                CPU 负载
-                {{
-                  (100 - (deviceInfo.cpuinfo?.[0]?.idle as any) || 0).toFixed(2)
-                }}
-                %
-              </div>
-              <div class="device-values">
-                <div class="load-item">
-                  <span class="load-label">核心1</span>
-                  <span class="load-value"
-                    >{{
-                      (
-                        100 - (deviceInfo.cpuinfo?.[1]?.idle as any) || 0
-                      ).toFixed(0)
-                    }}
-                    %</span
-                  >
-                </div>
-                <div class="load-item">
-                  <span class="load-label">核心2</span>
-                  <span class="load-value"
-                    >{{
-                      (
-                        100 - (deviceInfo.cpuinfo?.[2]?.idle as any) || 0
-                      ).toFixed(0)
-                    }}
-                    %</span
-                  >
-                </div>
-                <div class="load-item">
-                  <span class="load-label">核心3</span>
-                  <span class="load-value"
-                    >{{
-                      (
-                        100 - (deviceInfo.cpuinfo?.[3]?.idle as any) || 0
-                      ).toFixed(0)
-                    }}
-                    %</span
-                  >
-                </div>
-                <div class="load-item">
-                  <span class="load-label">核心4</span>
-                  <span class="load-value"
-                    >{{
-                      (
-                        100 - (deviceInfo.cpuinfo?.[4]?.idle as any) || 0
-                      ).toFixed(0)
-                    }}
-                    %</span
-                  >
-                </div>
-              </div>
-            </div> -->
           </div>
         </div>
       </div>
@@ -1311,7 +1233,8 @@
               <span class="mh-info-value">/data/kano_plugins/mihomo</span>
             </div>
             <div class="mh-info-item">
-              <el-tag v-if="mihomoBinaryVersionInfo.has_update" type="warning" size="small">有新版本</el-tag>
+              <el-tag v-if="mihomoBinaryVersionInfo.remote_version && !mihomoBinaryVersionInfo.installed" type="info" size="small">未安装</el-tag>
+              <el-tag v-else-if="mihomoBinaryVersionInfo.has_update" type="warning" size="small">有新版本</el-tag>
               <el-tag v-else-if="mihomoBinaryVersionInfo.remote_version && !mihomoBinaryVersionInfo.has_update" type="success" size="small">已是最新</el-tag>
             </div>
           </div>
@@ -1355,6 +1278,166 @@
 
     <template #footer>
       <el-button @click="mihomoDialogVisible = false">关闭</el-button>
+    </template>
+  </el-dialog>
+
+  <!-- ───────── 网络设置弹窗 ───────── -->
+  <el-dialog
+    v-model="networkSettingsDialogVisible"
+    title="网络设置"
+    width="min(760px, 96vw)"
+    :close-on-click-modal="true"
+    class="wireless-dialog">
+    <div class="settings-panel">
+      <section class="settings-section">
+        <div class="settings-section-title">网络制式</div>
+        <div class="settings-inline network-mode-row">
+          <el-select
+            v-model="networkForm.net_select"
+            class="net-select settings-select"
+            popper-class="net-select-popper"
+            placeholder="未知">
+            <el-option v-for="opt in netSelectOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+          </el-select>
+          <el-button class="network-mode-apply" type="primary" :loading="networkApplying === 'mode'" @click="applyNetworkMode">应用</el-button>
+        </div>
+      </section>
+
+      <section class="settings-section">
+        <div class="settings-section-title">4G 锁频段</div>
+        <el-checkbox-group v-model="networkForm.lte_bands" class="band-checkbox-grid">
+          <el-checkbox-button v-for="band in lteBandOptions" :key="band" :label="band">B{{ band }}</el-checkbox-button>
+        </el-checkbox-group>
+        <div class="settings-actions">
+          <el-button size="small" @click="lockCurrentLTEBands">锁当前频段</el-button>
+          <el-button size="small" @click="networkForm.lte_bands = []">自动</el-button>
+          <el-button size="small" type="primary" :loading="networkApplying === 'lteBand'" @click="applyLTEBandLock">应用 4G 锁频</el-button>
+        </div>
+      </section>
+
+      <section class="settings-section">
+        <div class="settings-section-title">5G 锁频段</div>
+        <el-checkbox-group v-model="networkForm.nr_bands" class="band-checkbox-grid">
+          <el-checkbox-button v-for="band in nrBandOptions" :key="band" :label="band">N{{ band }}</el-checkbox-button>
+        </el-checkbox-group>
+        <div class="settings-actions">
+          <el-button size="small" @click="lockCurrentNRBands">锁当前频段</el-button>
+          <el-button size="small" @click="networkForm.nr_bands = []">自动</el-button>
+          <el-button size="small" type="primary" :loading="networkApplying === 'nrBand'" @click="applyNRBandLock">应用 5G 锁频</el-button>
+        </div>
+      </section>
+
+      <section class="settings-section">
+        <div class="settings-section-title">小区锁定</div>
+        <div class="cell-lock-grid">
+          <div class="cell-lock-block">
+            <div class="settings-small-title">4G 小区</div>
+            <el-input v-model="networkForm.lock_lte_pci" placeholder="PCI" />
+            <el-input v-model="networkForm.lock_lte_earfcn" placeholder="EARFCN" />
+            <div class="settings-actions">
+              <el-button size="small" @click="fillCurrentLTECell">填入当前小区</el-button>
+              <el-button size="small" @click="clearLTECell">解锁</el-button>
+              <el-button size="small" type="primary" :loading="networkApplying === 'lteCell'" @click="applyLTECellLock">应用</el-button>
+            </div>
+          </div>
+          <div class="cell-lock-block">
+            <div class="settings-small-title">5G 小区</div>
+            <el-input v-model="networkForm.lock_nr_pci" placeholder="PCI" />
+            <el-input v-model="networkForm.lock_nr_earfcn" placeholder="ARFCN" />
+            <el-input v-model="networkForm.lock_nr_band" placeholder="Band，例如 78" />
+            <div class="settings-actions">
+              <el-button size="small" @click="fillCurrentNRCell">填入当前小区</el-button>
+              <el-button size="small" @click="clearNRCell">解锁</el-button>
+              <el-button size="small" type="primary" :loading="networkApplying === 'nrCell'" @click="applyNRCellLock">应用</el-button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+    <template #footer>
+      <el-button @click="networkSettingsDialogVisible = false">关闭</el-button>
+      <el-button type="primary" :loading="settingsSaving" @click="saveDeviceSettings">保存用户设置</el-button>
+    </template>
+  </el-dialog>
+
+  <!-- ───────── WiFi 设置弹窗 ───────── -->
+  <el-dialog
+    v-model="wifiSettingsDialogVisible"
+    title="WiFi 设置"
+    width="min(720px, 96vw)"
+    :close-on-click-modal="true"
+    class="wireless-dialog">
+    <div class="settings-panel">
+
+      <div class="wifi-settings-grid">
+        <section class="settings-section wifi-radio-card">
+          <div>
+            <div class="settings-section-title">2.4G WiFi</div>
+            <div class="wifi-radio-subtitle">{{ wifiForm.wifi24_enabled ? '当前已开启' : '当前已关闭' }}</div>
+          </div>
+          <el-switch
+            v-model="wifiForm.wifi24_enabled"
+            active-text="开启"
+            inactive-text="关闭"
+            @change="(v: boolean) => wifiStateSetHandler('wlan0', v)" />
+        </section>
+        <section class="settings-section wifi-radio-card">
+          <div>
+            <div class="settings-section-title">5G WiFi</div>
+            <div class="wifi-radio-subtitle">{{ wifiForm.wifi5_enabled ? '当前已开启' : '当前已关闭' }}</div>
+          </div>
+          <el-switch
+            v-model="wifiForm.wifi5_enabled"
+            active-text="开启"
+            inactive-text="关闭"
+            @change="(v: boolean) => wifiStateSetHandler('wlan2', v)" />
+        </section>
+      </div>
+      <section class="settings-section">
+        <div class="wifi-tuning-grid">
+          <div class="wifi-tuning-item">
+            <div class="settings-title-row">
+              <span class="settings-section-title">性能模式</span>
+              <el-tooltip
+                content="高性能会关闭 WiFi 省电策略，提升无线响应和稳定性，但耗电和发热可能增加。"
+                placement="top">
+                <span class="settings-help-icon">!</span>
+              </el-tooltip>
+            </div>
+            <el-switch
+              v-model="wifiForm.high_performance"
+              active-text="高性能"
+              inactive-text="省电" />
+          </div>
+          <div class="wifi-tuning-item wifi-power-control">
+            <div class="settings-title-row">
+              <span class="settings-section-title">发射功率</span>
+              <span class="wifi-value-pill">{{ wifiForm.txpower }}%</span>
+            </div>
+            <el-slider v-model="wifiForm.txpower" :min="1" :max="100" :step="1" />
+          </div>
+          <div class="wifi-tuning-item">
+            <div class="settings-title-row">
+              <span class="settings-section-title">国家码</span>
+              <el-tooltip
+                content="国家码会同时应用到 2.4G 和 5G WiFi，影响可用信道和发射限制。通常中国大陆填写 CN。"
+                placement="top">
+                <span class="settings-help-icon">!</span>
+              </el-tooltip>
+            </div>
+            <el-input v-model="wifiForm.country" maxlength="2" placeholder="CN" />
+          </div>
+        </div>
+      </section>
+
+      <div class="settings-actions">
+        <el-button @click="loadWifiSettings">重新读取</el-button>
+        <el-button type="primary" :loading="wifiSettingsSaving === 'settings'" @click="applyWifiSettings">应用 WiFi 参数</el-button>
+      </div>
+    </div>
+    <template #footer>
+      <el-button @click="wifiSettingsDialogVisible = false">关闭</el-button>
+      <el-button type="primary" :loading="settingsSaving" @click="saveDeviceSettings">保存用户设置</el-button>
     </template>
   </el-dialog>
 
@@ -1797,8 +1880,69 @@ const netSelectOptions = [
   { value: 'WL_AND_5G',  label: 'Auto' },
   { value: 'Only_5G',    label: '5G SA' },
   { value: 'LTE_AND_5G', label: '5G NSA' },
+  { value: 'WCDMA_AND_LTE', label: '4G/3G' },
   { value: 'Only_LTE',   label: '4G LTE' },
+  { value: 'Only_WCDMA', label: '3G' },
 ]
+const lteBandOptions = [1,2,3,4,5,7,8,18,19,20,26,28,29,32,34,38,39,40,41,42,43,48,66,71];
+const nrBandOptions = [1,2,3,5,7,8,18,20,26,28,29,38,40,41,48,66,71,75,77,78,79];
+
+type NetworkApplyTarget = '' | 'mode' | 'lteBand' | 'nrBand' | 'lteCell' | 'nrCell';
+type WifiApplyTarget = '' | 'psm' | 'settings';
+
+interface DeviceSettings {
+  net_select: string;
+  lte_bands: number[];
+  nr_bands: number[];
+  lock_lte_pci: string;
+  lock_lte_earfcn: string;
+  lock_nr_pci: string;
+  lock_nr_earfcn: string;
+  lock_nr_band: string;
+  wifi24_enabled?: boolean;
+  wifi5_enabled?: boolean;
+  wifi_txpower: string;
+  wifi24_txpower: string;
+  wifi5_txpower: string;
+  wifi_country: string;
+  wifi24_country: string;
+  wifi5_country: string;
+  wifi_performance: string;
+}
+
+const networkSettingsDialogVisible = ref(false);
+const wifiSettingsDialogVisible = ref(false);
+const networkApplying = ref<NetworkApplyTarget>('');
+const wifiSettingsSaving = ref<WifiApplyTarget>('');
+const settingsSaving = ref(false);
+
+const networkForm = reactive({
+  net_select: '',
+  lte_bands: [] as number[],
+  nr_bands: [] as number[],
+  lock_lte_pci: '',
+  lock_lte_earfcn: '',
+  lock_nr_pci: '',
+  lock_nr_earfcn: '',
+  lock_nr_band: '',
+});
+
+const wifiForm = reactive({
+  high_performance: false,
+  wifi24_enabled: false,
+  wifi5_enabled: false,
+  txpower: 100,
+  country: '',
+});
+
+const networkSettingsSummary = computed(() => {
+  const opt = netSelectOptions.find(item => item.value === (networkForm.net_select || d.value?.net_select));
+  return opt?.label || '点击配置';
+});
+
+const wifiSettingsSummary = computed(() => {
+  return wifiSettingsSaving.value ? '应用中...' : `${wifiInfo.value.wifiStatus24 ? '2.4G开' : '2.4G关'} / ${wifiInfo.value.wifiStatus5 ? '5G开' : '5G关'}`;
+});
 // 1.网络信息
 const netInfoRequest = {
   jsonrpc: '2.0',
@@ -2284,25 +2428,275 @@ function toggleSignalHelp(type: SignalType, metric: SignalMetric) {
 }
 
 async function netSelectChange(value: string) {
-  // console.log('网络模式切换到', value);
+  networkForm.net_select = value;
+  await applyNetworkMode();
+}
+
+function openNetworkSettingsDialog() {
+  syncNetworkFormFromCurrent();
+  networkSettingsDialogVisible.value = true;
+}
+
+function openWifiSettingsDialog() {
+  syncWifiFormFromCurrent();
+  wifiSettingsDialogVisible.value = true;
+  loadWifiSettings();
+}
+
+function syncNetworkFormFromCurrent() {
+  networkForm.net_select = networkForm.net_select || d.value?.net_select || '';
+  if (networkForm.lock_lte_pci === '') fillCurrentLTECell(false);
+  if (networkForm.lock_nr_pci === '') fillCurrentNRCell(false);
+}
+
+function syncWifiFormFromCurrent() {
+  wifiForm.high_performance = !!wifiInfo.value.highPerformance;
+  wifiForm.wifi24_enabled = !!wifiInfo.value.wifiStatus24;
+  wifiForm.wifi5_enabled = !!wifiInfo.value.wifiStatus5;
+}
+
+async function applyNetworkMode() {
+  if (!networkForm.net_select) return;
+  networkApplying.value = 'mode';
   try {
-    await callUbusBatch([
-      {
-        jsonrpc: '2.0',
-        id: 20,
-        method: 'call',
-        params: [
-          SESSION_ID,
-          'zte_nwinfo_api',
-          'nwinfo_set_netselect',
-          {"net_select":value},
-        ],
-      }
-    ])
+    const res = await axios.post('/api/network/mode', { net_select: networkForm.net_select });
+    if (res.data.code !== 0) throw new Error(res.data.msg || '模式切换失败');
     ElMessage.success('模式切换成功');
-  } catch (err) {
+    setTimeout(fetchAllData, 3000);
+  } catch (err: any) {
     console.error('模式切换失败', err);
-    ElMessage.error('模式切换失败');
+    ElMessage.error(err.message || '模式切换失败');
+  } finally {
+    networkApplying.value = '';
+  }
+}
+
+function parseBandsFromCarrierString(raw: unknown, bandIndex: number): number[] {
+  if (!raw || typeof raw !== 'string') return [];
+  const bands = raw
+    .split(';')
+    .map(item => Number(item.split(',')[bandIndex]))
+    .filter(band => Number.isFinite(band));
+  return [...new Set(bands)];
+}
+
+function getCurrentLTEBands(): number[] {
+  return parseBandsFromCarrierString(d.value?.lteca, 1)
+    .filter(band => lteBandOptions.includes(band));
+}
+
+function getCurrentNRBands(): number[] {
+  const bands = parseBandsFromCarrierString(d.value?.nrca, 3);
+  const primary = Number(String(d.value?.nr5g_action_band || '').replace(/^n/i, ''));
+  if (Number.isFinite(primary)) bands.unshift(primary);
+  return [...new Set(bands)].filter(band => nrBandOptions.includes(band));
+}
+
+function lockCurrentLTEBands() {
+  const bands = getCurrentLTEBands();
+  if (!bands.length) {
+    ElMessage.warning('未读取到当前 4G 频段');
+    return;
+  }
+  networkForm.lte_bands = bands;
+}
+
+function lockCurrentNRBands() {
+  const bands = getCurrentNRBands();
+  if (!bands.length) {
+    ElMessage.warning('未读取到当前 5G 频段');
+    return;
+  }
+  networkForm.nr_bands = bands;
+}
+
+async function applyLTEBandLock() {
+  networkApplying.value = 'lteBand';
+  try {
+    const res = await axios.post('/api/network/band/lte', { bands: networkForm.lte_bands });
+    if (res.data.code !== 0) throw new Error(res.data.msg || '4G 锁频失败');
+    ElMessage.success(networkForm.lte_bands.length ? '4G 锁频已应用' : '4G 锁频已取消');
+    fetchAllData();
+  } catch (err: any) {
+    ElMessage.error(err.message || '4G 锁频失败');
+  } finally {
+    networkApplying.value = '';
+  }
+}
+
+async function applyNRBandLock() {
+  networkApplying.value = 'nrBand';
+  try {
+    const res = await axios.post('/api/network/band/nr', { bands: networkForm.nr_bands });
+    if (res.data.code !== 0) throw new Error(res.data.msg || '5G 锁频失败');
+    ElMessage.success(networkForm.nr_bands.length ? '5G 锁频已应用' : '5G 锁频已取消');
+    fetchAllData();
+  } catch (err: any) {
+    ElMessage.error(err.message || '5G 锁频失败');
+  } finally {
+    networkApplying.value = '';
+  }
+}
+
+function fillCurrentLTECell(showMessage = true) {
+  networkForm.lock_lte_pci = String(d.value?.lte_pci || formatNrca(d.value?.lteca, '', 0, 0) || '').replace('-', '');
+  networkForm.lock_lte_earfcn = String(d.value?.lte_action_channel || formatNrca(d.value?.lteca, '', 0, 3) || '').replace('-', '');
+  if (showMessage) ElMessage.success('已填入当前 4G 小区');
+}
+
+function fillCurrentNRCell(showMessage = true) {
+  networkForm.lock_nr_pci = String(d.value?.nr5g_pci || formatNrca(d.value?.nrca, '', 0, 1) || '').replace('-', '');
+  networkForm.lock_nr_earfcn = String(d.value?.nr5g_action_channel || formatNrca(d.value?.nrca, '', 0, 4) || '').replace('-', '');
+  networkForm.lock_nr_band = String(d.value?.nr5g_action_band || formatNrca(d.value?.nrca, '', 0, 3) || '').replace(/^n/i, '').replace('-', '');
+  if (showMessage) ElMessage.success('已填入当前 5G 小区');
+}
+
+function clearLTECell() {
+  networkForm.lock_lte_pci = '0';
+  networkForm.lock_lte_earfcn = '0';
+}
+
+function clearNRCell() {
+  networkForm.lock_nr_pci = '0';
+  networkForm.lock_nr_earfcn = '0';
+  networkForm.lock_nr_band = '0';
+}
+
+async function applyLTECellLock() {
+  networkApplying.value = 'lteCell';
+  try {
+    const res = await axios.post('/api/network/cell/lte', {
+      pci: networkForm.lock_lte_pci,
+      earfcn: networkForm.lock_lte_earfcn,
+    });
+    if (res.data.code !== 0) throw new Error(res.data.msg || '4G 小区锁定失败');
+    ElMessage.success(networkForm.lock_lte_pci === '0' ? '4G 小区已解锁' : '4G 小区已锁定');
+    fetchAllData();
+  } catch (err: any) {
+    ElMessage.error(err.message || '4G 小区锁定失败');
+  } finally {
+    networkApplying.value = '';
+  }
+}
+
+async function applyNRCellLock() {
+  networkApplying.value = 'nrCell';
+  try {
+    const res = await axios.post('/api/network/cell/nr', {
+      pci: networkForm.lock_nr_pci,
+      earfcn: networkForm.lock_nr_earfcn,
+      band: networkForm.lock_nr_band,
+    });
+    if (res.data.code !== 0) throw new Error(res.data.msg || '5G 小区锁定失败');
+    ElMessage.success(networkForm.lock_nr_pci === '0' ? '5G 小区已解锁' : '5G 小区已锁定');
+    fetchAllData();
+  } catch (err: any) {
+    ElMessage.error(err.message || '5G 小区锁定失败');
+  } finally {
+    networkApplying.value = '';
+  }
+}
+
+function valuesFromUci(payload: any): Record<string, any> {
+  return payload?.values || payload?.data?.values || payload || {};
+}
+
+async function loadWifiSettings() {
+  try {
+    const res = await axios.get('/api/wifi/settings');
+    if (res.data.code !== 0) return;
+    const wifi0 = valuesFromUci(res.data.data?.wifi0);
+    const wifi1 = valuesFromUci(res.data.data?.wifi1);
+    wifiForm.txpower = Number(wifi0.txpowerpercent || wifi1.txpowerpercent || wifiForm.txpower || 100);
+    wifiForm.country = wifi0.country || wifi1.country || wifiForm.country;
+  } catch {
+    // U60Pro 外的开发环境可能没有 ubus，这里保持静默。
+  }
+}
+
+async function applyWifiPerformance() {
+  await psmSetHandler(wifiForm.high_performance, false);
+}
+
+function wifiAttrs(txpower: number, country: string) {
+  const attrs: Record<string, string> = {};
+  if (txpower) attrs.txpowerpercent = String(txpower);
+  if (country) attrs.country = country;
+  return attrs;
+}
+
+async function applyWifiSettings() {
+  wifiSettingsSaving.value = 'settings';
+  try {
+    const res = await axios.post('/api/wifi/settings', {
+      wifi0: wifiAttrs(wifiForm.txpower, wifiForm.country),
+      wifi1: wifiAttrs(wifiForm.txpower, wifiForm.country),
+    });
+    if (res.data.code !== 0) throw new Error(res.data.msg || 'WiFi 参数应用失败');
+    ElMessage.success('WiFi 参数已应用');
+    loadWifiSettings();
+  } catch (err: any) {
+    ElMessage.error(err.message || 'WiFi 参数应用失败');
+  } finally {
+    wifiSettingsSaving.value = '';
+  }
+}
+
+function buildDeviceSettings(): DeviceSettings {
+  return {
+    net_select: networkForm.net_select,
+    lte_bands: [...networkForm.lte_bands],
+    nr_bands: [...networkForm.nr_bands],
+    lock_lte_pci: networkForm.lock_lte_pci,
+    lock_lte_earfcn: networkForm.lock_lte_earfcn,
+    lock_nr_pci: networkForm.lock_nr_pci,
+    lock_nr_earfcn: networkForm.lock_nr_earfcn,
+    lock_nr_band: networkForm.lock_nr_band,
+    wifi24_enabled: wifiForm.wifi24_enabled,
+    wifi5_enabled: wifiForm.wifi5_enabled,
+    wifi_txpower: String(wifiForm.txpower),
+    wifi24_txpower: String(wifiForm.txpower),
+    wifi5_txpower: String(wifiForm.txpower),
+    wifi_country: wifiForm.country,
+    wifi24_country: wifiForm.country,
+    wifi5_country: wifiForm.country,
+    wifi_performance: wifiForm.high_performance ? 'high' : 'power_save',
+  };
+}
+
+async function saveDeviceSettings() {
+  settingsSaving.value = true;
+  try {
+    const res = await axios.put('/api/device/settings', buildDeviceSettings());
+    if (res.data.code !== 0) throw new Error(res.data.msg || '保存用户设置失败');
+    ElMessage.success('用户设置已保存');
+  } catch (err: any) {
+    ElMessage.error(err.message || '保存用户设置失败');
+  } finally {
+    settingsSaving.value = false;
+  }
+}
+
+async function loadDeviceSettings() {
+  try {
+    const res = await axios.get('/api/device/settings');
+    if (res.data.code !== 0 || !res.data.data) return;
+    const saved = res.data.data as Partial<DeviceSettings>;
+    networkForm.net_select = saved.net_select || networkForm.net_select;
+    networkForm.lte_bands = saved.lte_bands || [];
+    networkForm.nr_bands = saved.nr_bands || [];
+    networkForm.lock_lte_pci = saved.lock_lte_pci || '';
+    networkForm.lock_lte_earfcn = saved.lock_lte_earfcn || '';
+    networkForm.lock_nr_pci = saved.lock_nr_pci || '';
+    networkForm.lock_nr_earfcn = saved.lock_nr_earfcn || '';
+    networkForm.lock_nr_band = saved.lock_nr_band || '';
+    wifiForm.wifi24_enabled = saved.wifi24_enabled ?? wifiForm.wifi24_enabled;
+    wifiForm.wifi5_enabled = saved.wifi5_enabled ?? wifiForm.wifi5_enabled;
+    wifiForm.txpower = Number(saved.wifi_txpower || saved.wifi24_txpower || saved.wifi5_txpower || wifiForm.txpower || 100);
+    wifiForm.country = saved.wifi_country || saved.wifi24_country || saved.wifi5_country || '';
+    wifiForm.high_performance = saved.wifi_performance === 'high';
+  } catch {
+    // ignore
   }
 }
 
@@ -2485,6 +2879,9 @@ async function fetchAllData() {
     }
     // 按 id 取值（清晰又稳定）
     data.value        = resultMap[1]
+    if (!networkForm.net_select && resultMap[1]?.net_select) {
+      networkForm.net_select = resultMap[1].net_select
+    }
     lanData.value     = resultMap[2]
     wanData.value     = resultMap[3]
     wan6Data.value    = resultMap[4]
@@ -2575,7 +2972,7 @@ interface MihomoStatusData {
   binary_version: string; start_time: string; api_reachable: boolean; api_version: string; external_controller: string
   autostart_enabled: boolean
 }
-interface MihomoVersionData { remote_version: string; local_version: string; has_update: boolean }
+interface MihomoVersionData { remote_version: string; local_version: string; has_update: boolean; installed?: boolean }
 interface MihomoUpdateStatusData {
   state: string; msg: string; file_name: string; file_index: number
   file_total: number; downloaded: number; total: number; percent: number
@@ -2608,13 +3005,13 @@ const mihomoStatus = reactive<MihomoStatusData>({
   autostart_enabled: false
 })
 const mihomoVersionInfo = reactive<MihomoVersionData>({
-  remote_version: '', local_version: '', has_update: false
+  remote_version: '', local_version: '', has_update: false, installed: true
 })
 const mihomoUpdateStatus = reactive<MihomoUpdateStatusData>({
   state: 'idle', msg: '', file_name: '', file_index: 0, file_total: 0, downloaded: 0, total: 0, percent: 0
 })
 const mihomoBinaryVersionInfo = reactive<MihomoVersionData>({
-  remote_version: '', local_version: '', has_update: false
+  remote_version: '', local_version: '', has_update: false, installed: true
 })
 const mihomoInstallStatus = reactive<MihomoInstallStatusData>({
   state: 'idle', msg: '', downloaded: 0, total: 0, percent: 0
@@ -2830,9 +3227,13 @@ async function checkMihomoBinaryVersion() {
     const res = await axios.get('/api/mihomo/binary/version')
     if (res.data.code === 0) {
       Object.assign(mihomoBinaryVersionInfo, res.data.data)
-      mihomoBinaryVersionInfo.has_update
-        ? ElMessage.warning('新版本可用：' + mihomoBinaryVersionInfo.remote_version)
-        : ElMessage.success('已是最新版本')
+      if (!mihomoBinaryVersionInfo.installed) {
+        ElMessage.warning('Mihomo 内核未安装，可安装版本：' + (mihomoBinaryVersionInfo.remote_version || '未知'))
+      } else if (mihomoBinaryVersionInfo.has_update) {
+        ElMessage.warning('新版本可用：' + mihomoBinaryVersionInfo.remote_version)
+      } else {
+        ElMessage.success('已是最新版本')
+      }
     } else {
       ElMessage.error(res.data.msg)
     }
@@ -2966,23 +3367,32 @@ function psmGetHandler() {
       wifiInfo.value.wifiStatus24 = data.wlan0_status === 'up';
       // 5G: wlan2
       wifiInfo.value.wifiStatus5 = data.wlan2_status === 'up';
+      wifiForm.wifi24_enabled = wifiInfo.value.wifiStatus24;
+      wifiForm.wifi5_enabled = wifiInfo.value.wifiStatus5;
 
       // psm
       wifiInfo.value.highPerformance = data.wlan2_psm === 'off';
+      wifiForm.high_performance = wifiInfo.value.highPerformance;
     })
 }
-function psmSetHandler(val:boolean){
+async function psmSetHandler(val:boolean, showMessage: boolean = true){
   if (wifiPsmSaving.value) return;
   wifiPsmSaving.value = true;
-  axios.post('/api/wifi/psm/set', {
-    ifaces: ['wlan0', 'wlan1', 'wlan2', 'wlan3'],
-    mode: val ? 'off' : 'on',
-  }).then((res) => {
-    psmGetHandler()
-    ElMessage.success('WiFi已切换为:' + (val ? '高性能模式' : '省电模式'));
-  }).finally(() => {
+  wifiSettingsSaving.value = 'psm';
+  try {
+    const res = await axios.post('/api/wifi/psm/set', {
+      ifaces: ['wlan0', 'wlan1', 'wlan2', 'wlan3'],
+      mode: val ? 'off' : 'on',
+    });
+    if (res.data.code !== 0) throw new Error(res.data.msg || 'WiFi 性能模式切换失败');
+    psmGetHandler();
+    if (showMessage) ElMessage.success('WiFi已切换为:' + (val ? '高性能模式' : '省电模式'));
+  } catch (err: any) {
+    ElMessage.error(err.message || 'WiFi 性能模式切换失败');
+  } finally {
     wifiPsmSaving.value = false;
-  });
+    wifiSettingsSaving.value = '';
+  }
 }
 function wifiStateSetHandler(iface:string, val:boolean){
   axios.post('/api/wifi/state/set', {
@@ -2990,6 +3400,8 @@ function wifiStateSetHandler(iface:string, val:boolean){
     up: val,
   }).then((res) => {
     psmGetHandler()
+    if (iface === 'wlan0') wifiForm.wifi24_enabled = val;
+    if (iface === 'wlan2') wifiForm.wifi5_enabled = val;
     ElMessage.success((iface == 'wlan0' ? '2.4G' : ((iface == 'wlan2' ? '5G' : '其他'))) + '-WiFi已' + (val ? '开启' : '关闭'));
   });
 }
@@ -3128,8 +3540,8 @@ async function openDeviceDialog() {
 // 改用「固定 body + 记录/还原 scrollY」：锁定时把 body 设为 position:fixed 并上移 scrollY,
 // 既挡住背景滚动又保留视觉位置；关闭时还原样式并 scrollTo 回原位。
 let lockedScrollY = 0;
-watch([deviceDialogVisible, mihomoDialogVisible], ([w, m]) => {
-  const anyOpen = w || m;
+watch([deviceDialogVisible, mihomoDialogVisible, networkSettingsDialogVisible, wifiSettingsDialogVisible], ([deviceOpen, mihomoOpen, networkOpen, wifiOpen]) => {
+  const anyOpen = deviceOpen || mihomoOpen || networkOpen || wifiOpen;
   const body = document.body;
   if (anyOpen) {
     lockedScrollY = window.scrollY || document.documentElement.scrollTop || 0;
@@ -3154,6 +3566,7 @@ watch([deviceDialogVisible, mihomoDialogVisible], ([w, m]) => {
 
 onMounted(() => {
   fetchAllData();
+  loadDeviceSettings();
   if (autoRefresh.value) {
     startAutoRefresh();
   }
@@ -5449,6 +5862,261 @@ onUnmounted(() => {
   }
   .net-select-popper.el-popper .el-popper__arrow::before {
     background: #1e293b !important;
+  }
+}
+
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings-section {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.settings-section-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.92);
+  margin-bottom: 12px;
+}
+
+.settings-small-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.84);
+  margin-bottom: 8px;
+}
+
+.settings-inline,
+.settings-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.network-mode-row {
+  gap: 12px;
+}
+
+.wireless-dialog .network-mode-row .net-select {
+  width: 96px;
+  margin-top: 0;
+}
+
+.wireless-dialog .network-mode-row .net-select .el-select__wrapper {
+  width: 96px;
+  height: 26px;
+  min-height: 26px;
+  padding: 0 8px;
+  font-size: 12px;
+  border-radius: 7px;
+}
+
+.wireless-dialog .network-mode-row .net-select .el-select__selected-item {
+  font-size: 12px;
+}
+
+.wireless-dialog .network-mode-row .network-mode-apply {
+  width: 96px;
+  height: 26px;
+  padding: 0 12px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.wifi-tuning-grid {
+  display: grid;
+  grid-template-columns: minmax(190px, 0.8fr) minmax(260px, 1.4fr) minmax(140px, 0.7fr);
+  gap: 12px;
+  align-items: stretch;
+}
+
+.wifi-tuning-item {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.wifi-tuning-item .settings-section-title,
+.wifi-radio-card .settings-section-title {
+  margin-bottom: 0;
+}
+
+.wifi-tuning-item .el-input {
+  width: 100%;
+}
+
+.settings-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.settings-help-icon {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.12);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  cursor: help;
+}
+
+.wifi-value-pill {
+  flex: 0 0 auto;
+  min-width: 54px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(96, 165, 250, 0.18);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
+  border: 1px solid rgba(96, 165, 250, 0.35);
+}
+
+.settings-field-label {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.wifi-power-control {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wireless-dialog .settings-panel .el-switch__label {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.wireless-dialog .settings-panel .el-switch__label.is-active {
+  color: #ffffff;
+}
+
+.wireless-dialog .settings-panel .el-slider__runway {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.wireless-dialog .settings-panel .el-slider__bar {
+  background: #60a5fa;
+}
+
+.wireless-dialog .settings-panel .el-slider__button {
+  border-color: #ffffff;
+}
+
+.wireless-dialog .settings-panel .el-slider {
+  --el-slider-main-bg-color: #60a5fa;
+  --el-slider-runway-bg-color: rgba(255, 255, 255, 0.18);
+}
+
+.settings-select {
+  width: min(260px, 100%);
+}
+
+.band-checkbox-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.wireless-dialog .band-checkbox-grid .el-checkbox-button {
+  margin: 0;
+}
+
+.wireless-dialog .band-checkbox-grid .el-checkbox-button__inner {
+  min-width: 24px;
+  height: 22px;
+  padding: 0 10px;
+  border-radius: 999px !important;
+  border: 1px solid rgba(255, 255, 255, 0.18) !important;
+  background: rgba(255, 255, 255, 0.07);
+  color: rgba(255, 255, 255, 0.76);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 20px;
+  box-shadow: none !important;
+}
+
+.wireless-dialog .band-checkbox-grid .el-checkbox-button__inner:hover {
+  border-color: rgba(96, 165, 250, 0.7) !important;
+  color: #ffffff;
+  background: rgba(96, 165, 250, 0.14);
+}
+
+.wireless-dialog .band-checkbox-grid .el-checkbox-button.is-checked .el-checkbox-button__inner {
+  border-color: rgba(96, 165, 250, 0.95) !important;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.95), rgba(14, 165, 233, 0.9));
+  color: #ffffff;
+}
+
+.wireless-dialog .band-checkbox-grid .el-checkbox-button:first-child .el-checkbox-button__inner,
+.wireless-dialog .band-checkbox-grid .el-checkbox-button:last-child .el-checkbox-button__inner {
+  border-radius: 999px !important;
+}
+
+.cell-lock-grid,
+.wifi-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.wifi-radio-card {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.wifi-radio-subtitle {
+  color: rgba(255, 255, 255, 0.56);
+  font-size: 12px;
+}
+
+.cell-lock-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wifi-settings-grid .settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+@media (max-width: 720px) {
+  .wifi-tuning-grid,
+  .cell-lock-grid,
+  .wifi-settings-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

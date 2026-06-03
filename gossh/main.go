@@ -891,6 +891,15 @@ func main() {
 		auth.POST("/api/wifi/psm/get", service.WifiPsmGetHandler)
 		auth.POST("/api/wifi/psm/set", service.WifiPsmSetHandler)
 		auth.POST("/api/wifi/state/set", service.WifiStateSetHandler)
+		auth.GET("/api/device/settings", service.DeviceSettingsGetHandler)
+		auth.PUT("/api/device/settings", service.DeviceSettingsSaveHandler)
+		auth.POST("/api/network/mode", service.NetworkModeSetHandler)
+		auth.POST("/api/network/band/lte", service.NetworkLTEBandLockHandler)
+		auth.POST("/api/network/band/nr", service.NetworkNRBandLockHandler)
+		auth.POST("/api/network/cell/lte", service.NetworkLTECellLockHandler)
+		auth.POST("/api/network/cell/nr", service.NetworkNRCellLockHandler)
+		auth.GET("/api/wifi/settings", service.WifiUciGetHandler)
+		auth.POST("/api/wifi/settings", service.WifiSettingsSetHandler)
 		auth.POST("/api/net/ambr/get", service.NetAmbrGetHandler)
 	}
 

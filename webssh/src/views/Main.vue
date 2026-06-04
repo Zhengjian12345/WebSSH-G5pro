@@ -2062,6 +2062,14 @@ const wifiSettingsSummary = computed(() => {
 
 const localSpeedTestDialogVisible = ref(false);
 let localSpeedTestWorkers: Worker[] = [];
+// 当前速度按固定节拍采样的定时器（见 startLocalSpeedTest 里的 sampleTick）
+let localSpeedTestSampleTimer: number | null = null;
+function clearSpeedSampleTimer() {
+  if (localSpeedTestSampleTimer != null) {
+    clearInterval(localSpeedTestSampleTimer);
+    localSpeedTestSampleTimer = null;
+  }
+}
 const TRAFFIC_SPEEDTEST_DEFAULT_URL = 'https://autopatchcn.yuanshen.com/client_app/download/pc_zip/20211117173857_8JkfDHNPmqKi67qR/YuanShen_2.3.0.zip';
 const TRAFFIC_SPEEDTEST_URL_STORAGE_KEY = 'trafficSpeedTestUrl';
 const TRAFFIC_SPEEDTEST_THREADS_STORAGE_KEY = 'trafficSpeedTestThreads';
@@ -2116,6 +2124,7 @@ function resetLocalSpeedTestResult() {
 }
 
 function stopLocalSpeedTest(message: unknown = '测速已停止') {
+  clearSpeedSampleTimer();
   if (!localSpeedTest.running) return;
   const finalMessage = typeof message === 'string' ? message : '测速已停止';
   localSpeedTest.message = '正在停止测速...';
@@ -2160,25 +2169,34 @@ async function startLocalSpeedTest() {
   let firstByteTime = 0;       // 首字节到达时间：从这里开始计时，排除连接建立耗时
   let measureStartTime = 0;    // 预热结束、计入平均速度的起点
   let measuredBaseBytes = 0;   // measureStartTime 时刻已下载的字节数
-  let lastUpdateTime = 0;
-  let lastBytes = 0;
   let finishedWorkers = 0;
   let failed = false;
 
-  const refreshUi = (now: number) => {
-    if (now - lastUpdateTime < 200) return;
-    const deltaSeconds = (now - lastUpdateTime) / 1000;
-    const deltaBytes = totalBytes - lastBytes;
-    if (deltaSeconds > 0) localSpeedTest.currentSpeed = formatSpeedMbps(deltaBytes / deltaSeconds);
+  // 「当前速度」改为：固定节拍采样 + 最近 1s 滑动平均，消除原来单个 200ms 瞬时窗口
+  // 在重发空窗 / 主线程抖动时砸出的「闪现极低值」。采样在定时器里做，不再被 chunk 事件驱动。
+  const SAMPLE_INTERVAL_MS = 250;   // 固定采样节拍
+  const SPEED_WINDOW_MS = 1000;     // 当前速度 = 最近 1s 平均
+  const speedSamples: { t: number; bytes: number }[] = [];
+
+  const sampleTick = () => {
+    if (firstByteTime === 0) return;            // 还没首字节，不显示
+    const now = performance.now();
+    speedSamples.push({ t: now, bytes: totalBytes });
+    // 丢掉窗口外的旧样本，但保留一个跨过窗口起点的样本，使窗口稳定覆盖 ~1s
+    while (speedSamples.length >= 2 && speedSamples[1].t <= now - SPEED_WINDOW_MS) {
+      speedSamples.shift();
+    }
+    const oldest = speedSamples[0];
+    const dt = (now - oldest.t) / 1000;
+    if (dt > 0) localSpeedTest.currentSpeed = formatSpeedMbps((totalBytes - oldest.bytes) / dt);
     localSpeedTest.downloaded = formatSpeedTestBytes(totalBytes);
     localSpeedTest.elapsed = `${((now - firstByteTime) / 1000).toFixed(2)} 秒`;
     localSpeedTest.progress = targetBytes > 0 ? Math.min(100, Math.round((totalBytes / targetBytes) * 100)) : 0;
-    lastUpdateTime = now;
-    lastBytes = totalBytes;
   };
 
   const finishSpeedTest = (message = '测速完成') => {
     if (!localSpeedTest.running) return;
+    clearSpeedSampleTimer();
     const endTime = performance.now();
     let avgBytes = totalBytes;
     let avgSeconds = Math.max((endTime - (firstByteTime || endTime)) / 1000, 0.001);
@@ -2212,7 +2230,6 @@ async function startLocalSpeedTest() {
       const now = performance.now();
       if (firstByteTime === 0) {
         firstByteTime = now;
-        lastUpdateTime = now;
         localSpeedTest.message = localSpeedTest.loop ? '循环测速中...' : '测速中...';
       }
       totalBytes += bytes;
@@ -2220,7 +2237,7 @@ async function startLocalSpeedTest() {
         measureStartTime = now;
         measuredBaseBytes = totalBytes;
       }
-      refreshUi(now);
+      // 速度/进度的 UI 更新交给 sampleTick 定时器，这里只累加字节
       return;
     }
     if (data.type === 'done' || data.type === 'stopped') {
@@ -2238,6 +2255,8 @@ async function startLocalSpeedTest() {
     }
   };
 
+  clearSpeedSampleTimer();
+  localSpeedTestSampleTimer = window.setInterval(sampleTick, SAMPLE_INTERVAL_MS);
   localSpeedTest.activeThreads = streams;
   localSpeedTestWorkers = Array.from({ length: streams }, (_, idx) => {
     const worker = new Worker(new URL('../workers/trafficSpeedtest.worker.ts', import.meta.url), { type: 'module' });

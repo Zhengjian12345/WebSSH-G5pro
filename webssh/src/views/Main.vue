@@ -83,7 +83,7 @@
             :class="{ active: localSpeedTest.running }"
             @click="openLocalSpeedTestDialog"
           >
-            <span class="quick-action-icon">NET</span>
+            <span class="quick-action-icon">SPD</span>
             <span class="quick-action-copy">
               <span class="quick-action-title">流量测速</span>
               <span class="quick-action-subtitle">{{ localSpeedTest.running ? '测速中...' : localSpeedTestSummary }}</span>

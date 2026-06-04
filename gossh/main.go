@@ -902,6 +902,7 @@ func main() {
 		auth.GET("/api/wifi/settings", service.WifiUciGetHandler)
 		auth.POST("/api/wifi/settings", service.WifiSettingsSetHandler)
 		auth.POST("/api/net/ambr/get", service.NetAmbrGetHandler)
+		auth.GET("/api/speedtest", service.SpeedTestHandler)
 	}
 
 	{ // SSH 连接配置

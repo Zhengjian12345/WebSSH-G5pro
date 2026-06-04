@@ -16,11 +16,9 @@
       </div>
 
       <div class="controls">
-        <div style="display: flex; gap: 10px">
-
+        <div class="top-status-controls">
           <div style="display: flex; position: relative">
             <span class="uptime-label">{{ netWorkProvider }} {{ networkType }}{{ is5GA ? 'A' : '' }}</span>
-
           </div>
 
           <div style="display: flex; align-items: center">
@@ -47,7 +45,7 @@
           </div>
         </div>
 
-        <div class="auto-refresh-controls" style="display: flex;align-items: center;gap: 10px;flex-wrap: wrap;">
+        <div class="quick-actions-grid">
           <button
             class="quick-action-button"
             :class="{ active: autoRefresh }"
@@ -60,39 +58,48 @@
             </span>
           </button>
 
-          <div class="auto-refresh-controls">
-            <button
-              class="quick-action-button adb-action-button"
-              :class="{ active: usbStatus?.connect == 1 }"
-              @click="handleOpenAdbClick" >
-              <span class="quick-action-icon">ADB</span>
-              <span class="quick-action-copy">
-                <span class="quick-action-title">开启 ADB</span>
-                <span class="quick-action-subtitle">{{ usbStatus?.connect == 1 ? 'USB 已连接' : '等待 USB 连接' }}</span>
-              </span>
-            </button>
-          </div>
-
-        </div>
-
-        <div class="auto-refresh-controls" style="display: flex;align-items: center;gap: 10px;flex-wrap: wrap;">
           <button
-              v-if="mmEntryUnlocked"
-              class="quick-action-button mm-action-button"
-              :class="{ active: mmStatus.running }"
-              @click="openMmDialog">
-              <span class="quick-action-icon">MH</span>
-              <span class="quick-action-copy">
-                <span class="quick-action-title">Mihomo</span>
-                <span class="quick-action-subtitle">{{ mmStatus.running ? '代理运行中' : '代理已停止' }}</span>
-              </span>
-            </button>
+            class="quick-action-button adb-action-button"
+            :class="{ active: usbStatus?.connect == 1 }"
+            @click="handleOpenAdbClick"
+          >
+            <span class="quick-action-icon">ADB</span>
+            <span class="quick-action-copy">
+              <span class="quick-action-title">开启 ADB</span>
+              <span class="quick-action-subtitle">{{ usbStatus?.connect == 1 ? 'USB 已连接' : '等待 USB 连接' }}</span>
+            </span>
+          </button>
 
-          <button class="quick-action-button" style="padding: 1px 10px;" @click="openNetworkSettingsDialog">
+          <button class="quick-action-button" @click="openNetworkSettingsDialog">
             <span class="quick-action-icon">Net</span>
             <span class="quick-action-copy">
               <span class="quick-action-title" style="font-size: 13px;">网络设置</span>
               <span class="quick-action-subtitle">{{ networkSettingsSummary }}</span>
+            </span>
+          </button>
+
+          <button
+            class="quick-action-button speedtest-action-button"
+            :class="{ active: localSpeedTest.running }"
+            @click="openLocalSpeedTestDialog"
+          >
+            <span class="quick-action-icon">LAN</span>
+            <span class="quick-action-copy">
+              <span class="quick-action-title">内网测速</span>
+              <span class="quick-action-subtitle">{{ localSpeedTest.running ? '测速中...' : localSpeedTestSummary }}</span>
+            </span>
+          </button>
+
+          <button
+            v-if="mmEntryUnlocked"
+            class="quick-action-button mm-action-button"
+            :class="{ active: mmStatus.running }"
+            @click="openMmDialog"
+          >
+            <span class="quick-action-icon">MH</span>
+            <span class="quick-action-copy">
+              <span class="quick-action-title">Mihomo</span>
+              <span class="quick-action-subtitle">{{ mmStatus.running ? '代理运行中' : '代理已停止' }}</span>
             </span>
           </button>
 
@@ -108,6 +115,7 @@
               <span class="wifi-mode-action">{{ wifiSettingsSummary }}</span>
             </span>
           </button>
+
         </div>
 
       </div>
@@ -1445,6 +1453,63 @@
     </template>
   </el-dialog>
 
+  <!-- ───────── 内网测速弹窗 ───────── -->
+  <el-dialog
+    v-model="localSpeedTestDialogVisible"
+    title="内网测速"
+    width="min(520px, 96vw)"
+    :close-on-click-modal="!localSpeedTest.running"
+    class="wireless-dialog">
+    <div class="local-speedtest-panel">
+      <div class="local-speedtest-header">
+        <div>
+          <div class="settings-section-title">测试大小</div>
+          <div class="local-speedtest-hint">浏览器从本机后端下载测试数据，结果反映当前内网链路吞吐。</div>
+        </div>
+        <el-select v-model="localSpeedTest.size" class="local-speedtest-size">
+          <el-option :value="50" label="50 MB" />
+          <el-option :value="100" label="100 MB" />
+          <el-option :value="200" label="200 MB" />
+          <el-option :value="500" label="500 MB" />
+          <el-option :value="1024" label="1024 MB" />
+        </el-select>
+      </div>
+
+      <div class="local-speedtest-meter">
+        <div class="local-speedtest-value">{{ localSpeedTest.currentSpeed }}</div>
+        <div class="local-speedtest-label">当前速度</div>
+        <el-progress
+          :percentage="localSpeedTest.progress"
+          :stroke-width="10"
+          :show-text="false"
+          striped
+          :striped-flow="localSpeedTest.running" />
+      </div>
+
+      <div class="local-speedtest-stats">
+        <div>
+          <span>已下载</span>
+          <strong>{{ localSpeedTest.downloaded }}</strong>
+        </div>
+        <div>
+          <span>平均速度</span>
+          <strong>{{ localSpeedTest.avgSpeed }}</strong>
+        </div>
+        <div>
+          <span>耗时</span>
+          <strong>{{ localSpeedTest.elapsed }}</strong>
+        </div>
+      </div>
+
+      <div v-if="localSpeedTest.message" class="local-speedtest-message">{{ localSpeedTest.message }}</div>
+    </div>
+    <template #footer>
+      <el-button @click="localSpeedTestDialogVisible = false" :disabled="localSpeedTest.running">关闭</el-button>
+      <el-button v-if="localSpeedTest.running" type="danger" @click="stopLocalSpeedTest">停止</el-button>
+      <el-button v-else type="primary" @click="startLocalSpeedTest">开始测速</el-button>
+    </template>
+  </el-dialog>
+
   <!-- ───────── 已连接设备弹窗（无线 + 有线） ───────── -->
   <el-dialog
     v-model="deviceDialogVisible"
@@ -1948,6 +2013,112 @@ const networkSettingsSummary = computed(() => {
 const wifiSettingsSummary = computed(() => {
   return wifiSettingsSaving.value ? '应用中...' : `${wifiInfo.value.wifiStatus24 ? '2.4G开' : '2.4G关'} / ${wifiInfo.value.wifiStatus5 ? '5G开' : '5G关'}`;
 });
+
+const localSpeedTestDialogVisible = ref(false);
+let localSpeedTestController: AbortController | null = null;
+const localSpeedTest = reactive({
+  running: false,
+  size: 200,
+  progress: 0,
+  currentSpeed: '-- Mbps',
+  avgSpeed: '-- Mbps',
+  downloaded: '0 MB',
+  elapsed: '0.00 秒',
+  message: '',
+});
+
+const localSpeedTestSummary = computed(() => {
+  return localSpeedTest.avgSpeed !== '-- Mbps' ? localSpeedTest.avgSpeed : '点击测速';
+});
+
+function openLocalSpeedTestDialog() {
+  localSpeedTestDialogVisible.value = true;
+}
+
+function formatSpeedMbps(bytesPerSecond: number) {
+  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return '0.00 Mbps';
+  return `${(bytesPerSecond * 8 / 1024 / 1024).toFixed(2)} Mbps`;
+}
+
+function formatSpeedTestBytes(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 MB';
+  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function resetLocalSpeedTestResult() {
+  localSpeedTest.progress = 0;
+  localSpeedTest.currentSpeed = '-- Mbps';
+  localSpeedTest.avgSpeed = '-- Mbps';
+  localSpeedTest.downloaded = '0 MB';
+  localSpeedTest.elapsed = '0.00 秒';
+  localSpeedTest.message = '';
+}
+
+function stopLocalSpeedTest() {
+  localSpeedTestController?.abort();
+}
+
+async function startLocalSpeedTest() {
+  if (localSpeedTest.running) return;
+  resetLocalSpeedTestResult();
+  localSpeedTest.running = true;
+  localSpeedTest.message = '正在准备测速...';
+  localSpeedTestController = new AbortController();
+  const targetBytes = localSpeedTest.size * 1024 * 1024;
+  const startTime = performance.now();
+  let lastUpdateTime = startTime;
+  let lastBytes = 0;
+  let totalBytes = 0;
+
+  try {
+    const token = localStorage.getItem('token') || '';
+    const res = await fetch(`/api/speedtest?size=${localSpeedTest.size}&t=${Date.now()}`, {
+      signal: localSpeedTestController.signal,
+      cache: 'no-store',
+      headers: token ? { Authorization: token } : {},
+    });
+    if (!res.ok) throw new Error(`请求失败: ${res.status}`);
+    const reader = res.body?.getReader();
+    if (!reader) throw new Error('浏览器不支持流式读取');
+    localSpeedTest.message = '测速中...';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.length;
+      const now = performance.now();
+      if (now - lastUpdateTime >= 100) {
+        const deltaSeconds = (now - lastUpdateTime) / 1000;
+        const deltaBytes = totalBytes - lastBytes;
+        localSpeedTest.currentSpeed = formatSpeedMbps(deltaBytes / deltaSeconds);
+        localSpeedTest.downloaded = formatSpeedTestBytes(totalBytes);
+        localSpeedTest.elapsed = `${((now - startTime) / 1000).toFixed(2)} 秒`;
+        localSpeedTest.progress = Math.min(100, Math.round((totalBytes / targetBytes) * 100));
+        lastUpdateTime = now;
+        lastBytes = totalBytes;
+      }
+    }
+
+    const totalSeconds = Math.max((performance.now() - startTime) / 1000, 0.001);
+    localSpeedTest.currentSpeed = formatSpeedMbps(totalBytes / totalSeconds);
+    localSpeedTest.avgSpeed = formatSpeedMbps(totalBytes / totalSeconds);
+    localSpeedTest.downloaded = formatSpeedTestBytes(totalBytes);
+    localSpeedTest.elapsed = `${totalSeconds.toFixed(2)} 秒`;
+    localSpeedTest.progress = 100;
+    localSpeedTest.message = '测速完成';
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      localSpeedTest.message = '测速已停止';
+    } else {
+      localSpeedTest.message = err?.message || '测速失败';
+      ElMessage.error(localSpeedTest.message);
+    }
+  } finally {
+    localSpeedTest.running = false;
+    localSpeedTestController = null;
+  }
+}
 // 1.网络信息
 const netInfoRequest = {
   jsonrpc: '2.0',
@@ -3673,8 +3844,8 @@ async function openDeviceDialog() {
 // 改用「固定 body + 记录/还原 scrollY」：锁定时把 body 设为 position:fixed 并上移 scrollY,
 // 既挡住背景滚动又保留视觉位置；关闭时还原样式并 scrollTo 回原位。
 let lockedScrollY = 0;
-watch([deviceDialogVisible, mmDialogVisible, networkSettingsDialogVisible, wifiSettingsDialogVisible], ([deviceOpen, mmOpen, networkOpen, wifiOpen]) => {
-  const anyOpen = deviceOpen || mmOpen || networkOpen || wifiOpen;
+watch([deviceDialogVisible, mmDialogVisible, networkSettingsDialogVisible, wifiSettingsDialogVisible, localSpeedTestDialogVisible], ([deviceOpen, mmOpen, networkOpen, wifiOpen, speedTestOpen]) => {
+  const anyOpen = deviceOpen || mmOpen || networkOpen || wifiOpen || speedTestOpen;
   const body = document.body;
   if (anyOpen) {
     lockedScrollY = window.scrollY || document.documentElement.scrollTop || 0;
@@ -3713,6 +3884,7 @@ onMounted(() => {
 onUnmounted(() => {
   stopAutoRefresh();
   stopMmAllPolls();
+  stopLocalSpeedTest();
   if (mmGateClickTimer) {
     clearTimeout(mmGateClickTimer);
     mmGateClickTimer = null;
@@ -3814,10 +3986,19 @@ onUnmounted(() => {
   gap: 16px;
 }
 
-.auto-refresh-controls {
+.top-status-controls {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+}
+
+.quick-actions-grid {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(132px, max-content);
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
 }
 
 .quick-action-button,
@@ -3826,7 +4007,9 @@ onUnmounted(() => {
   align-items: center;
   gap: 10px;
   min-height: 42px;
+  width: 100%;
   max-width: 100%;
+  box-sizing: border-box;
   padding: 6px 10px 6px 10px;
   border: 1px solid rgba(125, 211, 252, 0.35);
   border-radius: 8px;
@@ -3853,6 +4036,12 @@ onUnmounted(() => {
   border-color: rgba(167, 139, 250, 0.5);
   background: linear-gradient(135deg, rgba(124, 58, 237, 0.28), rgba(14, 165, 233, 0.2));
   box-shadow: 0 6px 18px rgba(124, 58, 237, 0.2);
+}
+
+.speedtest-action-button.active {
+  border-color: rgba(45, 212, 191, 0.52);
+  background: linear-gradient(135deg, rgba(20, 184, 166, 0.28), rgba(14, 165, 233, 0.2));
+  box-shadow: 0 6px 18px rgba(20, 184, 166, 0.2);
 }
 
 /* Mihomo 弹窗样式见文件底部非 scoped 块（因 el-dialog teleport 到 body） */
@@ -4862,8 +5051,9 @@ onUnmounted(() => {
 
 /* 百分比文字 */
 .battery-percent {
-  padding-left: 8px;
-  font-size: 13px;
+  padding-left: 5px;
+  padding-bottom: 2px;
+  font-size: 12px;
   font-weight: 700;
   color: rgba(255, 255, 255, 0.92);
   letter-spacing: 0.3px;
@@ -4988,8 +5178,15 @@ onUnmounted(() => {
     width: 100%;
   }
 
-  .auto-refresh-controls {
+  .top-status-controls {
     justify-content: center;
+  }
+
+  .quick-actions-grid {
+    grid-auto-flow: row;
+    grid-auto-columns: auto;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 80%;
   }
 
   .content {
@@ -5450,6 +5647,106 @@ onUnmounted(() => {
 }
 .device-count-link:hover {
   color: #ffffff;
+}
+
+.local-speedtest-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.local-speedtest-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.local-speedtest-hint {
+  margin-top: 6px;
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.local-speedtest-size {
+  width: 128px;
+  flex: 0 0 auto;
+}
+
+.local-speedtest-meter {
+  padding: 18px;
+  border: 1px solid rgba(96, 165, 250, 0.22);
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.2), rgba(14, 165, 233, 0.12));
+}
+
+.local-speedtest-value {
+  color: #ffffff;
+  font-size: 34px;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: 0;
+}
+
+.local-speedtest-label {
+  margin: 6px 0 14px;
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 12px;
+}
+
+.local-speedtest-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.local-speedtest-stats > div {
+  min-width: 0;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.local-speedtest-stats span {
+  display: block;
+  margin-bottom: 6px;
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 12px;
+}
+
+.local-speedtest-stats strong {
+  display: block;
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 650;
+  word-break: break-word;
+}
+
+.local-speedtest-message {
+  min-height: 20px;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 13px;
+}
+
+@media (max-width: 560px) {
+  .local-speedtest-header {
+    flex-direction: column;
+  }
+  .local-speedtest-size {
+    width: 100%;
+  }
+  .local-speedtest-stats {
+    grid-template-columns: 1fr;
+  }
+  .local-speedtest-value {
+    font-size: 28px;
+  }
 }
 
 </style>

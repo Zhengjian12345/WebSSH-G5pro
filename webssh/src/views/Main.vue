@@ -2059,52 +2059,88 @@ function stopLocalSpeedTest() {
   localSpeedTestController?.abort();
 }
 
+// 并发流数：单条 TCP 流受拥塞窗口/RTT/WiFi airtime 限制，难以打满千兆+链路，
+// 多条并行连接聚合吞吐才能测出真实带宽（同 Speedtest / LibreSpeed / iperf3 -P 的做法）。
+const SPEEDTEST_STREAMS = 6;
+// 预热时长（毫秒）：忽略 TCP 慢启动爬坡阶段，平均速度只统计进入稳态后的数据，提升准确度。
+const SPEEDTEST_GRACE_MS = 800;
+
 async function startLocalSpeedTest() {
   if (localSpeedTest.running) return;
   resetLocalSpeedTestResult();
   localSpeedTest.running = true;
   localSpeedTest.message = '正在准备测速...';
   localSpeedTestController = new AbortController();
-  const targetBytes = localSpeedTest.size * 1024 * 1024;
-  const startTime = performance.now();
-  let lastUpdateTime = startTime;
-  let lastBytes = 0;
-  let totalBytes = 0;
 
-  try {
-    const token = localStorage.getItem('token') || '';
-    const res = await fetch(`/api/speedtest?size=${localSpeedTest.size}&t=${Date.now()}`, {
-      signal: localSpeedTestController.signal,
+  const token = localStorage.getItem('token') || '';
+  const totalMB = localSpeedTest.size;
+  const streams = Math.max(1, Math.min(SPEEDTEST_STREAMS, totalMB));
+  const perStreamMB = Math.max(1, Math.ceil(totalMB / streams));
+  const targetBytes = perStreamMB * streams * 1024 * 1024;
+
+  let totalBytes = 0;
+  let firstByteTime = 0;       // 首字节到达时间：从这里开始计时，排除连接建立耗时
+  let measureStartTime = 0;    // 预热结束、计入平均速度的起点
+  let measuredBaseBytes = 0;   // measureStartTime 时刻已下载的字节数
+  let lastUpdateTime = 0;
+  let lastBytes = 0;
+
+  const refreshUi = (now: number) => {
+    if (now - lastUpdateTime < 200) return;
+    const deltaSeconds = (now - lastUpdateTime) / 1000;
+    const deltaBytes = totalBytes - lastBytes;
+    if (deltaSeconds > 0) localSpeedTest.currentSpeed = formatSpeedMbps(deltaBytes / deltaSeconds);
+    localSpeedTest.downloaded = formatSpeedTestBytes(totalBytes);
+    localSpeedTest.elapsed = `${((now - firstByteTime) / 1000).toFixed(2)} 秒`;
+    localSpeedTest.progress = Math.min(100, Math.round((totalBytes / targetBytes) * 100));
+    lastUpdateTime = now;
+    lastBytes = totalBytes;
+  };
+
+  const pump = async (idx: number) => {
+    const res = await fetch(`/api/speedtest?size=${perStreamMB}&n=${idx}&t=${Date.now()}`, {
+      signal: localSpeedTestController!.signal,
       cache: 'no-store',
       headers: token ? { Authorization: token } : {},
     });
     if (!res.ok) throw new Error(`请求失败: ${res.status}`);
     const reader = res.body?.getReader();
     if (!reader) throw new Error('浏览器不支持流式读取');
-    localSpeedTest.message = '测速中...';
-
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      totalBytes += value.length;
       const now = performance.now();
-      if (now - lastUpdateTime >= 100) {
-        const deltaSeconds = (now - lastUpdateTime) / 1000;
-        const deltaBytes = totalBytes - lastBytes;
-        localSpeedTest.currentSpeed = formatSpeedMbps(deltaBytes / deltaSeconds);
-        localSpeedTest.downloaded = formatSpeedTestBytes(totalBytes);
-        localSpeedTest.elapsed = `${((now - startTime) / 1000).toFixed(2)} 秒`;
-        localSpeedTest.progress = Math.min(100, Math.round((totalBytes / targetBytes) * 100));
+      if (firstByteTime === 0) {
+        firstByteTime = now;
         lastUpdateTime = now;
-        lastBytes = totalBytes;
+        localSpeedTest.message = '测速中...';
       }
+      totalBytes += value.length;
+      // 预热结束后锚定测速基准点
+      if (measureStartTime === 0 && now - firstByteTime >= SPEEDTEST_GRACE_MS) {
+        measureStartTime = now;
+        measuredBaseBytes = totalBytes;
+      }
+      refreshUi(now);
     }
+  };
 
-    const totalSeconds = Math.max((performance.now() - startTime) / 1000, 0.001);
-    localSpeedTest.currentSpeed = formatSpeedMbps(totalBytes / totalSeconds);
-    localSpeedTest.avgSpeed = formatSpeedMbps(totalBytes / totalSeconds);
+  try {
+    await Promise.all(Array.from({ length: streams }, (_, i) => pump(i)));
+
+    const endTime = performance.now();
+    // 平均速度优先取「预热后的稳态区间」；若样本太短则回退到整体平均
+    let avgBytes = totalBytes;
+    let avgSeconds = Math.max((endTime - (firstByteTime || endTime)) / 1000, 0.001);
+    if (measureStartTime > 0 && endTime - measureStartTime >= 300) {
+      avgBytes = totalBytes - measuredBaseBytes;
+      avgSeconds = (endTime - measureStartTime) / 1000;
+    }
+    const avg = avgBytes / avgSeconds;
+    localSpeedTest.currentSpeed = formatSpeedMbps(avg);
+    localSpeedTest.avgSpeed = formatSpeedMbps(avg);
     localSpeedTest.downloaded = formatSpeedTestBytes(totalBytes);
-    localSpeedTest.elapsed = `${totalSeconds.toFixed(2)} 秒`;
+    localSpeedTest.elapsed = `${((endTime - (firstByteTime || endTime)) / 1000).toFixed(2)} 秒`;
     localSpeedTest.progress = 100;
     localSpeedTest.message = '测速完成';
   } catch (err: any) {

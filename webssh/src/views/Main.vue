@@ -1477,20 +1477,29 @@
     <div class="local-speedtest-panel">
       <div class="local-speedtest-header">
         <div>
-          <div class="settings-section-title">测速地址</div>
-          <div class="local-speedtest-hint">设备端通过当前外网下载该地址，浏览器读取转发流并计算速度。默认使用原神下载源。</div>
+          <div class="settings-section-title">测速地址
+            <el-tooltip
+                content="默认为原神下载源 : )"
+                placement="top">
+                <span class="settings-help-icon" size="small" style="margin-left: 4px;">!</span>
+              </el-tooltip>
+          </div>
+          
         </div>
-        <el-input
-          v-model="localSpeedTest.url"
-          class="local-speedtest-url"
-          :disabled="localSpeedTest.running"
-          placeholder="https://..."
-          clearable />
+        <div class="local-speedtest-url-field">
+          <el-input
+            v-model="localSpeedTest.url"
+            class="local-speedtest-url"
+            :disabled="localSpeedTest.running"
+            placeholder="https://..."
+            clearable />
+          
+        </div>
       </div>
 
       <div class="local-speedtest-options">
         <div class="local-speedtest-option">
-          <span>下载线程</span>
+          <span>多线程</span>
           <el-input-number
             v-model="localSpeedTest.threads"
             :min="1"
@@ -1500,12 +1509,12 @@
             controls-position="right" />
         </div>
         <div class="local-speedtest-option">
-          <span>循环下载</span>
+          <span>循环</span>
           <el-switch
             v-model="localSpeedTest.loop"
             :disabled="localSpeedTest.running"
-            active-text="开启"
-            inactive-text="关闭" />
+            active-text="开"
+            inactive-text="关" />
         </div>
       </div>
 
@@ -1518,6 +1527,31 @@
           :show-text="false"
           striped
           :striped-flow="localSpeedTest.running" />
+      </div>
+
+      <div v-if="localSpeedTest.running || speedChart.hasData" class="local-speedtest-chart">
+        <div class="local-speedtest-chart-head">
+          <span>速度曲线</span>
+          <span v-if="speedChart.max > 0" class="lst-peak">峰值 {{ speedChart.max.toFixed(1) }} Mbps</span>
+        </div>
+        <div class="local-speedtest-plot">
+          <div class="lst-ylabels">
+            <span v-for="g in speedChart.ygrid" :key="'yl-' + g.y" :style="{ top: g.y + 'px' }">{{ g.label }}</span>
+          </div>
+          <div class="lst-main">
+            <svg class="local-speedtest-chart-svg" :viewBox="`0 0 ${SPEED_CHART_W} ${SPEED_CHART_H}`" preserveAspectRatio="none">
+              <g class="lst-grid">
+                <line v-for="g in speedChart.xgrid" :key="'vx-' + g.x" :x1="g.x" y1="0" :x2="g.x" :y2="SPEED_CHART_H" />
+                <line v-for="g in speedChart.ygrid" :key="'hy-' + g.y" x1="0" :y1="g.y" :x2="SPEED_CHART_W" :y2="g.y" />
+              </g>
+              <polyline v-if="speedChart.area" :points="speedChart.area" class="lst-area" />
+              <polyline :points="speedChart.points" class="lst-line" vector-effect="non-scaling-stroke" />
+            </svg>
+            <div class="lst-xlabels">
+              <span v-for="g in speedChart.xgrid" :key="'xl-' + g.x" :style="{ left: g.xPct + '%' }">{{ g.label }}</span>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="local-speedtest-stats">
@@ -2092,6 +2126,65 @@ const localSpeedTestSummary = computed(() => {
   return localSpeedTest.avgSpeed !== '-- Mbps' ? localSpeedTest.avgSpeed : '点击测速';
 });
 
+// 速度曲线采样点：t=首字节起的经过秒数（横轴），v=瞬时速度 Mbps（纵轴）
+const speedCurve = ref<{ t: number; v: number }[]>([]);
+const SPEED_CHART_W = 300;
+const SPEED_CHART_H = 90;
+const SPEED_CURVE_MAX_POINTS = 600;   // 循环测速时只保留最近这么多点（约 150s）
+const speedChart = computed(() => {
+  const data = speedCurve.value;
+  const n = data.length;
+  // ── 纵轴（速度）：漂亮刻度，随峰值变化 ──
+  let max = 0;
+  for (const p of data) if (p.v > max) max = p.v;
+  const yStep = niceStep(max > 0 ? max : 1, 4);
+  const niceMax = Math.max(yStep, Math.ceil((max > 0 ? max : 1) / yStep) * yStep);
+  const ygrid: { y: number; label: string }[] = [];
+  for (let v = 0; v <= niceMax + yStep * 1e-6; v += yStep) {
+    ygrid.push({ y: +(SPEED_CHART_H - (v / niceMax) * SPEED_CHART_H).toFixed(2), label: fmtAxis(v) });
+  }
+  if (n === 0) return { points: '', area: '', max: 0, niceMax, ygrid, xgrid: [], hasData: false };
+
+  // ── 横轴（时间）：用样本实际经过秒数，漂亮时间刻度随时长增长/滚动 ──
+  const tMin = data[0].t;
+  const tMax = data[n - 1].t;
+  const span = tMax - tMin;
+  const xOf = (t: number) => (span > 0 ? ((t - tMin) / span) * SPEED_CHART_W : 0);
+  const xgrid: { x: number; xPct: number; label: string }[] = [];
+  if (span > 0) {
+    const xStep = niceStep(span, 6);
+    for (let t = Math.ceil(tMin / xStep) * xStep; t <= tMax + xStep * 1e-6; t += xStep) {
+      const x = xOf(t);
+      xgrid.push({ x: +x.toFixed(2), xPct: +((x / SPEED_CHART_W) * 100).toFixed(2), label: fmtTime(t) });
+    }
+  }
+
+  // ── 曲线 ──
+  let points = '';
+  for (let i = 0; i < n; i++) {
+    points += (i ? ' ' : '') + xOf(data[i].t).toFixed(1) + ',' + (SPEED_CHART_H - (data[i].v / niceMax) * SPEED_CHART_H).toFixed(1);
+  }
+  const area = n > 1 ? `0,${SPEED_CHART_H} ${points} ${SPEED_CHART_W},${SPEED_CHART_H}` : '';
+  return { points, area, max, niceMax, ygrid, xgrid, hasData: n > 1 };
+});
+
+// 坐标轴“漂亮”步进：把范围分成约 ticks 段，步进取 1/2/5×10^n
+function niceStep(range: number, ticks: number): number {
+  const raw = range / ticks;
+  if (!Number.isFinite(raw) || raw <= 0) return 1;
+  const base = Math.pow(10, Math.floor(Math.log10(raw)));
+  const f = raw / base;
+  const nf = f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10;
+  return nf * base;
+}
+function fmtAxis(v: number): string {
+  if (v <= 0) return '0';
+  return Number.isInteger(v) ? String(v) : v.toFixed(1);
+}
+function fmtTime(v: number): string {
+  return (Number.isInteger(v) ? String(v) : v.toFixed(1)) + 's';
+}
+
 function openLocalSpeedTestDialog() {
   localSpeedTestDialogVisible.value = true;
 }
@@ -2121,6 +2214,7 @@ function resetLocalSpeedTestResult() {
   localSpeedTest.elapsed = '0.00 秒';
   localSpeedTest.activeThreads = 0;
   localSpeedTest.message = '';
+  speedCurve.value = [];
 }
 
 function stopLocalSpeedTest(message: unknown = '测速已停止') {
@@ -2188,7 +2282,19 @@ async function startLocalSpeedTest() {
     }
     const oldest = speedSamples[0];
     const dt = (now - oldest.t) / 1000;
-    if (dt > 0) localSpeedTest.currentSpeed = formatSpeedMbps((totalBytes - oldest.bytes) / dt);
+    const bps = dt > 0 ? (totalBytes - oldest.bytes) / dt : 0;
+    localSpeedTest.currentSpeed = formatSpeedMbps(bps);
+
+    // 速度曲线：记录这一拍的 经过秒数 + 瞬时速度（Mbps）
+    speedCurve.value.push({ t: (now - firstByteTime) / 1000, v: bps * 8 / 1024 / 1024 });
+    if (speedCurve.value.length > SPEED_CURVE_MAX_POINTS) speedCurve.value.shift();
+
+    // 平均速度实时更新（与最终口径一致：预热结束后累计），随时间往稳态爬升
+    if (measureStartTime > 0) {
+      const avgSec = (now - measureStartTime) / 1000;
+      if (avgSec > 0) localSpeedTest.avgSpeed = formatSpeedMbps((totalBytes - measuredBaseBytes) / avgSec);
+    }
+
     localSpeedTest.downloaded = formatSpeedTestBytes(totalBytes);
     localSpeedTest.elapsed = `${((now - firstByteTime) / 1000).toFixed(2)} 秒`;
     localSpeedTest.progress = targetBytes > 0 ? Math.min(100, Math.round((totalBytes / targetBytes) * 100)) : 0;
@@ -6026,7 +6132,7 @@ onUnmounted(() => {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 14px;
+  gap: 10px;
   padding: 14px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 12px;
@@ -6040,9 +6146,15 @@ onUnmounted(() => {
   line-height: 1.5;
 }
 
-.local-speedtest-url {
-  width: min(360px, 100%);
+.local-speedtest-url-field {
   flex: 1 1 260px;
+  width: min(360px, 100%);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.local-speedtest-url {
+  width: 100%;
 }
 
 .local-speedtest-options {
@@ -6095,6 +6207,85 @@ onUnmounted(() => {
   font-size: 12px;
 }
 
+.local-speedtest-chart {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid rgba(96, 165, 250, 0.22);
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.18);
+}
+.local-speedtest-chart-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+}
+.local-speedtest-chart-head .lst-peak {
+  color: #7dd3fc;
+  font-weight: 700;
+}
+.local-speedtest-plot {
+  display: flex;
+  align-items: flex-start;
+}
+.lst-ylabels {
+  position: relative;
+  flex: 0 0 34px;
+  width: 34px;
+  height: 90px;
+  overflow: visible;
+}
+.lst-ylabels span {
+  position: absolute;
+  right: 6px;
+  transform: translateY(-50%);
+  font-size: 10px;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.45);
+  white-space: nowrap;
+}
+.lst-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.local-speedtest-chart-svg {
+  display: block;
+  width: 100%;
+  height: 90px;
+}
+.lst-xlabels {
+  position: relative;
+  height: 14px;
+  margin-top: 3px;
+  overflow: visible;
+}
+.lst-xlabels span {
+  position: absolute;
+  transform: translateX(-50%);
+  font-size: 10px;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.45);
+  white-space: nowrap;
+}
+.local-speedtest-chart-svg .lst-grid line {
+  stroke: rgba(255, 255, 255, 0.1);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.local-speedtest-chart-svg .lst-line {
+  fill: none;
+  stroke: #38bdf8;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.local-speedtest-chart-svg .lst-area {
+  fill: rgba(56, 189, 248, 0.14);
+  stroke: none;
+}
+
 .local-speedtest-stats {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -6136,15 +6327,27 @@ onUnmounted(() => {
     gap: 10px;
     padding: 12px;
   }
-  .local-speedtest-url {
+  .local-speedtest-url-field {
     width: 100%;
     flex: 0 1 auto;
   }
   .local-speedtest-options {
-    grid-template-columns: 1fr;
+    /* 移动端也保持两列同一行，不堆成两行 */
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
   }
   .local-speedtest-option {
-    padding: 10px 12px;
+    padding: 8px 10px;
+    gap: 8px;
+  }
+  .local-speedtest-option > span {
+    font-size: 12px;
+    flex: 0 0 auto;
+  }
+  .local-speedtest-option .el-input-number {
+    width: auto;
+    flex: 1 1 auto;
+    min-width: 0;
   }
   .local-speedtest-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -6230,6 +6433,25 @@ onUnmounted(() => {
   background: rgba(255, 255, 255, 0.25);
   border-color: rgba(255, 255, 255, 0.5);
   color: #ffffff;
+}
+
+/* el-input-number 加减按钮：默认用浅色填充(--el-fill-color-light)，在深色弹窗里很突兀，这里统一成深色玻璃风格 */
+.wireless-dialog .el-input-number__decrease,
+.wireless-dialog .el-input-number__increase {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.75);
+}
+.wireless-dialog .el-input-number__decrease:hover,
+.wireless-dialog .el-input-number__increase:hover {
+  background: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
+}
+.wireless-dialog .el-input-number.is-disabled .el-input-number__decrease,
+.wireless-dialog .el-input-number.is-disabled .el-input-number__increase,
+.wireless-dialog .el-input-number__decrease.is-disabled,
+.wireless-dialog .el-input-number__increase.is-disabled {
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.3);
 }
 
 /* 设备卡片网格 */
@@ -6742,7 +6964,9 @@ onUnmounted(() => {
   font-size: 14px;
   font-weight: 700;
   color: rgba(255, 255, 255, 0.92);
-  margin-bottom: 12px;
+  display: flex;
+  margin-bottom: 0px;
+  margin-top: 5px;
 }
 
 .settings-small-title {

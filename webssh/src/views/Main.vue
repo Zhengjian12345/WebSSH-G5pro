@@ -1587,6 +1587,14 @@
                 <span class="wireless-info-label">IP 地址</span>
                 <span class="wireless-info-value">{{ device.ip_address || '-' }}</span>
               </div>
+              <div v-if="device.signal != null" class="wireless-info-row">
+                <span class="wireless-info-label">信号</span>
+                <span class="wireless-info-value" :class="signalClass(device.signal)">{{ device.signal }} dBm</span>
+              </div>
+              <div v-if="device.tx_rate" class="wireless-info-row">
+                <span class="wireless-info-label">协商速率</span>
+                <span class="wireless-info-value">{{ formatRate(device.tx_rate) }} Mbps</span>
+              </div>
               <div class="wireless-info-row">
                 <span class="wireless-info-label">连接时间</span>
                 <span class="wireless-info-value">{{ device.access_time || '-' }}</span>
@@ -4009,6 +4017,9 @@ interface ConnectedDevice {
   hostname: string;
   interface_type: string;
   access_time: string;
+  // 以下字段由 iwinfo assoclist 按 MAC 匹配补充（仅无线终端）
+  signal?: number;   // 信号强度，dBm
+  tx_rate?: number;  // 设备下行协商速率（AP 发送给终端），kbit/s
 }
 
 const deviceDialogVisible = ref(false);
@@ -4020,6 +4031,86 @@ function getDeviceTagClass(interfaceType: string): string {
   if (interfaceType === '5G') return 'tag-5g';
   if (interfaceType === 'Ethernet') return 'tag-ethernet';
   return 'tag-24g';
+}
+
+// 协商速率：iwinfo 的 rate 单位为 kbit/s，转成 Mbps 整数展示（单位在模板里统一加）
+function formatRate(kbit?: number): string {
+  if (!kbit || kbit <= 0) return '-';
+  return String(Math.round(kbit / 1000));
+}
+
+// 信号强度分级配色：数值越接近 0 越强
+function signalClass(signal?: number): string {
+  if (signal == null) return '';
+  if (signal >= -50) return 'signal-strong';
+  if (signal >= -60) return 'signal-good';
+  if (signal >= -70) return 'signal-fair';
+  return 'signal-weak';
+}
+
+// 归一化 MAC：去分隔符 + 大写，兼容 ZTE 列表与 iwinfo 之间冒号/横线/大小写差异
+const normMac = (m: any) => String(m || '').toUpperCase().replace(/[^0-9A-F]/g, '');
+
+// 从 iwinfo assoclist 的批量结果（id 100=wlan0/2.4G、101=wlan2/5G）里，
+// 按 MAC 建立 信号 + 下行协商速率(AP→终端) 索引
+function buildRfMap(resultMap: Record<number, any>): Record<string, { signal: number; txRate: number }> {
+  const rfMap: Record<string, { signal: number; txRate: number }> = {};
+  for (const id of [100, 101]) {
+    const stations = resultMap[id]?.results;
+    if (!Array.isArray(stations)) continue;
+    for (const st of stations) {
+      const key = normMac(st?.mac);
+      if (!key) continue;
+      rfMap[key] = {
+        signal: st.signal,
+        txRate: st.tx?.rate ?? 0,  // AP 发给终端 = 终端下行
+      };
+    }
+  }
+  return rfMap;
+}
+
+// 只拉两个频段的 iwinfo assoclist（弹窗每秒刷新用，比整张设备列表轻）
+async function fetchWirelessRfMap(): Promise<Record<string, { signal: number; txRate: number }>> {
+  const resultMap = await callUbusBatch([
+    { jsonrpc: '2.0', id: 100, method: 'call', params: [SESSION_ID, 'iwinfo', 'assoclist', { device: 'wlan0' }] },
+    { jsonrpc: '2.0', id: 101, method: 'call', params: [SESSION_ID, 'iwinfo', 'assoclist', { device: 'wlan2' }] },
+  ]);
+  return buildRfMap(resultMap);
+}
+
+// 把信号/下行速率原地更新到现有无线设备（按 MAC）；匹配不到则清空那两行
+function applyRfToWireless(rfMap: Record<string, { signal: number; txRate: number }>) {
+  for (const d of wirelessDeviceList.value) {
+    const rf = rfMap[normMac(d.mac_address)];
+    d.signal = rf ? rf.signal : undefined;
+    d.tx_rate = rf ? rf.txRate : undefined;
+  }
+}
+
+// 弹窗期间每秒刷新 信号 + 协商速率。用自调度 setTimeout（等上次完成再排下次），
+// 避免慢网络下请求叠加；关闭弹窗或组件卸载时停止。
+let deviceRfTimer: number | null = null;
+function startDeviceRfRefresh() {
+  stopDeviceRfRefresh();
+  const tick = async () => {
+    if (!deviceDialogVisible.value) return;
+    try {
+      const rfMap = await fetchWirelessRfMap();
+      if (!deviceDialogVisible.value) return; // 等待期间被关掉
+      applyRfToWireless(rfMap);
+    } catch { /* 刷新失败静默，不打断弹窗 */ }
+    if (deviceDialogVisible.value) {
+      deviceRfTimer = window.setTimeout(tick, 1000);
+    }
+  };
+  deviceRfTimer = window.setTimeout(tick, 1000);
+}
+function stopDeviceRfRefresh() {
+  if (deviceRfTimer != null) {
+    clearTimeout(deviceRfTimer);
+    deviceRfTimer = null;
+  }
 }
 
 async function openDeviceDialog() {
@@ -4051,9 +4142,29 @@ async function openDeviceDialog() {
           {},
         ],
       },
+      // iwinfo assoclist：U60Pro 上 wlan0=2.4G、wlan2=5G，
+      // 用来补充每个无线终端的信号值与协商速率（下面按 MAC 匹配）
+      {
+        jsonrpc: '2.0',
+        id: 100,
+        method: 'call',
+        params: [SESSION_ID, 'iwinfo', 'assoclist', { device: 'wlan0' }],
+      },
+      {
+        jsonrpc: '2.0',
+        id: 101,
+        method: 'call',
+        params: [SESSION_ID, 'iwinfo', 'assoclist', { device: 'wlan2' }],
+      },
     ]);
+
+    // 按 MAC 把首批 信号 + 下行协商速率 合并进无线设备列表
+    const rfMap = buildRfMap(resultMap);
     if (resultMap[98]?.wireless_access_list_info) {
-      wirelessDeviceList.value = resultMap[98].wireless_access_list_info;
+      wirelessDeviceList.value = (resultMap[98].wireless_access_list_info as ConnectedDevice[]).map((d) => {
+        const rf = rfMap[normMac(d.mac_address)];
+        return rf ? { ...d, signal: rf.signal, tx_rate: rf.txRate } : d;
+      });
     }
     if (resultMap[99]?.lan_access_list_info) {
       wiredDeviceList.value = resultMap[99].lan_access_list_info;
@@ -4062,6 +4173,10 @@ async function openDeviceDialog() {
     ElMessage.error('获取设备列表失败: ' + (e?.message ?? e));
   } finally {
     deviceListLoading.value = false;
+  }
+  // 弹窗期间每秒刷新 信号 + 协商速率（有无线设备才轮询）
+  if (deviceDialogVisible.value && wirelessDeviceList.value.length > 0) {
+    startDeviceRfRefresh();
   }
 }
 
@@ -4095,6 +4210,11 @@ watch([deviceDialogVisible, mmDialogVisible, networkSettingsDialogVisible, wifiS
   }
 });
 
+// 关闭「已连接设备」弹窗时停止每秒刷新（按钮 / 点遮罩 / ESC 都会触发）
+watch(deviceDialogVisible, (open) => {
+  if (!open) stopDeviceRfRefresh();
+});
+
 onMounted(() => {
   initMmEntryState();
   fetchAllData();
@@ -4112,6 +4232,7 @@ onUnmounted(() => {
   stopAutoRefresh();
   stopMmAllPolls();
   stopLocalSpeedTest();
+  stopDeviceRfRefresh();
   if (mmGateClickTimer) {
     clearTimeout(mmGateClickTimer);
     mmGateClickTimer = null;
@@ -6201,6 +6322,11 @@ onUnmounted(() => {
   word-break: break-all;
   font-weight: 500;
 }
+/* 信号强度分级配色 */
+.wireless-dialog .wireless-info-value.signal-strong { color: #52db5d; font-weight: 700; }
+.wireless-dialog .wireless-info-value.signal-good   { color: #2bc8ae; font-weight: 700; }
+.wireless-dialog .wireless-info-value.signal-fair   { color: #dc8811; font-weight: 700; }
+.wireless-dialog .wireless-info-value.signal-weak   { color: #e03737; font-weight: 700; }
 
 /* 加载状态 spinner 颜色 */
 .wireless-dialog .loading-spinner {

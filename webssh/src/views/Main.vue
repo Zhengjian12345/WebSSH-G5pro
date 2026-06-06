@@ -37,17 +37,7 @@
             </span>
           </button>
 
-          <button
-            class="quick-action-button adb-action-button"
-            :class="{ active: usbStatus?.connect == 1 }"
-            @click="handleOpenAdbClick"
-          >
-            <span class="quick-action-icon">ADB</span>
-            <span class="quick-action-copy">
-              <span class="quick-action-title">开启 ADB</span>
-              <span class="quick-action-subtitle">{{ usbStatus?.connect == 1 ? 'USB 已连接' : '等待 USB 连接' }}</span>
-            </span>
-          </button>
+          <!-- ADB 按钮在 G5Pro 上暂不可用，已隐藏 -->
 
           <button class="quick-action-button" @click="openNetworkSettingsDialog">
             <span class="quick-action-icon">Net</span>
@@ -1485,62 +1475,8 @@
         </div>
       </el-tab-pane>
 
-      <el-tab-pane label="短信转发" name="sms">
-        <div class="system-tool-panel">
-          <div class="settings-section-title">短信转发</div>
-          <div class="sms-forward-grid">
-            <section class="system-tool-section">
-              <div class="system-tool-section-title">Bark</div>
-              <el-switch v-model="smsForward.barkEnabled" active-text="启用" inactive-text="关闭" />
-              <el-input v-model="smsForward.barkUrl" placeholder="https://api.day.app/你的Key?icon=https://..." clearable />
-            </section>
-            <section class="system-tool-section">
-              <div class="system-tool-section-title">TG Bot</div>
-              <el-switch v-model="smsForward.tgEnabled" active-text="启用" inactive-text="关闭" />
-              <el-input v-model="smsForward.tgBotToken" placeholder="Bot Token" clearable show-password />
-              <el-input v-model="smsForward.tgChatId" placeholder="Chat ID" clearable />
-            </section>
-          </div>
-          <div class="system-tool-actions">
-            <el-button size="small" :loading="smsForward.loading" @click="loadSmsMessages">刷新短信</el-button>
-            <el-button size="small" :loading="smsForward.configSaving" @click="saveSmsForwardConfig">保存配置</el-button>
-            <el-button size="small" type="primary" :loading="smsForward.forwarding" @click="forwardLatestSms">发送最新一条</el-button>
-          </div>
-          <div class="sms-forward-switches">
-            <div class="local-speedtest-option">
-              <span>后台监听</span>
-              <el-switch
-                :model-value="smsForward.running"
-                :loading="smsForward.controlChanging"
-                active-text="开"
-                inactive-text="关"
-                @change="(val: string | number | boolean) => setSmsForwardRunning(Boolean(val))" />
-            </div>
-            <div class="local-speedtest-option">
-              <span>开机自启</span>
-              <el-switch
-                :model-value="smsForward.autostartEnabled"
-                :loading="smsForward.autostartChanging"
-                active-text="开"
-                inactive-text="关"
-                @change="(val: string | number | boolean) => setSmsForwardAutostart(Boolean(val))" />
-            </div>
-          </div>
-          <div class="sms-forward-hint">后台每 {{ smsForward.pollInterval }} 秒轮询新短信；开机自启会在 webssh 启动时自动开启监听。</div>
-          <div v-if="smsForward.status" class="local-speedtest-message">{{ smsForward.status }}</div>
-          <div class="sms-message-list">
-            <div v-for="msg in smsMessages" :key="msg.id" class="sms-message-item">
-              <div class="sms-message-meta">
-                <span>#{{ msg.id }}</span>
-                <strong>{{ msg.number || '未知号码' }}</strong>
-                <span>{{ msg.date }}</span>
-              </div>
-              <div class="sms-message-content">{{ msg.content }}</div>
-            </div>
-            <div v-if="!smsForward.loading && smsMessages.length === 0" class="system-tool-empty">暂无短信</div>
-          </div>
-        </div>
-      </el-tab-pane>
+      <!-- 短信转发在 G5Pro 上暂不可用，已隐藏 -->
+
 
       <el-tab-pane label="rc.local" name="rcLocal">
         <div class="system-tool-panel">
@@ -1580,6 +1516,19 @@
     :close-on-click-modal="true"
     destroy-on-close
     class="wireless-dialog">
+    <template #header>
+      <div style="display:flex;align-items:center;gap:6px;">
+        <span>已连接设备</span>
+        <el-tooltip placement="top">
+          <template #content>
+            <div style="max-width:260px;line-height:1.6;">
+              该速率仅供参考，MLO 连接的设备和有线连接设备无法显示速率。
+            </div>
+          </template>
+          <span style="display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:rgba(64,158,255,0.15);color:#409eff;font-size:11px;font-weight:bold;cursor:help;">!</span>
+        </el-tooltip>
+      </div>
+    </template>
 
     <div v-if="deviceListLoading" style="text-align:center;padding:32px 0;">
       <div class="loading-spinner" style="width:32px;height:32px;border-width:3px;margin:0 auto 12px;"></div>

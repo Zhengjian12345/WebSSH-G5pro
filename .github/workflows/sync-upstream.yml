@@ -1,0 +1,208 @@
+name: Sync Upstream & Auto Release
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # 每6小时检查一次上游更新
+  workflow_dispatch:        # 手动触发
+
+permissions:
+  contents: write
+
+jobs:
+  sync-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. 检出当前仓库
+      - name: Checkout current repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PERSONAL_TOKEN }}
+          fetch-depth: 0
+
+      # 2. 拉取上游最新代码
+      - name: Fetch upstream
+        id: upstream
+        run: |
+          git remote add upstream https://github.com/Jack-bin183/WebSSH-u60pro.git
+          git fetch upstream --depth=50
+
+          # 比较上游 main 与本地 main 的差异
+          UPSTREAM_SHA=$(git rev-parse upstream/main)
+          LOCAL_SHA=$(git rev-parse origin/main)
+
+          if [ "$UPSTREAM_SHA" = "$LOCAL_SHA" ]; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "上游没有新提交，跳过同步"
+            exit 0
+          fi
+
+          # 检查是否有实质性差异（排除我们已知的 G5Pro 定制文件）
+          CHANGES=$(git diff --name-only origin/main..upstream/main | grep -v -E '^(gossh/app/service/zwrt_net_ambr\.go|gossh/app/service/zwrt_wifi\.go|gossh/app/utils/ubus\.go|gossh/main\.go)$' || true)
+
+          if [ -z "$CHANGES" ]; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "上游变更仅涉及 G5Pro 已定制的文件，跳过同步"
+            exit 0
+          fi
+
+          echo "has_changes=true" >> $GITHUB_OUTPUT
+          echo "检测到上游变更文件:"
+          echo "$CHANGES"
+
+      # 3. 合并上游代码（保留 G5Pro 定制）
+      - name: Merge upstream changes
+        if: steps.upstream.outputs.has_changes == 'true'
+        run: |
+          # 保存 G5Pro 定制文件的备份
+          cp gossh/main.go /tmp/main.go.bak
+          cp gossh/app/service/zwrt_net_ambr.go /tmp/zwrt_net_ambr.go.bak
+          cp gossh/app/service/zwrt_wifi.go /tmp/zwrt_wifi.go.bak
+          cp gossh/app/utils/ubus.go /tmp/ubus.go.bak
+
+          # 合并上游代码
+          git merge upstream/main --no-edit || {
+            echo "合并冲突，使用上游版本（非定制文件）"
+            # 对于非定制文件，使用上游版本
+            git checkout --theirs .
+            git add -A
+            git commit -m "merge upstream (resolve conflicts using upstream)"
+          }
+
+          # 恢复 G5Pro 定制文件
+          cp /tmp/main.go.bak gossh/main.go
+          cp /tmp/zwrt_net_ambr.go.bak gossh/app/service/zwrt_net_ambr.go
+          cp /tmp/zwrt_wifi.go.bak gossh/app/service/zwrt_wifi.go
+          cp /tmp/ubus.go.bak gossh/app/utils/ubus.go
+
+          git add -A
+          git commit -m "sync upstream: restore G5Pro customizations" || true
+
+      # 4. 自动递增版本号 (+0.01)
+      - name: Bump version
+        if: steps.upstream.outputs.has_changes == 'true'
+        id: bump
+        run: |
+          # 从 version/version.txt 读取当前版本
+          CURRENT=$(cat version/version.txt 2>/dev/null || echo "1.00")
+          echo "当前版本: $CURRENT"
+
+          # 版本号 +0.01（使用 awk 避免浮点精度问题）
+          NEW_VERSION=$(awk -v v="$CURRENT" 'BEGIN { printf "%.2f", v + 0.01 }')
+          echo "新版本: $NEW_VERSION"
+
+          # 更新 version.txt
+          echo "$NEW_VERSION" > version/version.txt
+
+          # 更新 main.go 中的版本号
+          sed -i "s/^var version = \".*\"/var version = \"$NEW_VERSION\"/" gossh/main.go
+
+          # 生成 changelog
+          BUILD_TIME=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S')
+          {
+            echo "## v${NEW_VERSION}"
+            echo ""
+            echo "构建时间: ${BUILD_TIME}"
+            echo ""
+            echo "### 同步上游更新"
+            echo ""
+            CHANGES=$(git diff --name-only HEAD~2..HEAD | grep -v -E '^(version/|gossh/main\.go)$' || true)
+            if [ -n "$CHANGES" ]; then
+              echo "$CHANGES" | while read f; do echo "- 更新: $f"; done
+            else
+              echo "- 同步上游最新代码"
+            fi
+            echo ""
+          } > version/changelog.txt
+
+          echo "VERSION=$NEW_VERSION" >> $GITHUB_ENV
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      # 5. 推送版本变更到 main 分支
+      - name: Push changes
+        if: steps.upstream.outputs.has_changes == 'true'
+        run: |
+          git push origin main
+
+      # 6. 推送 version.txt 到 version 分支
+      - name: Push version files
+        if: steps.upstream.outputs.has_changes == 'true'
+        run: |
+          mkdir -p /tmp/version-branch
+          cp version/version.txt /tmp/version-branch/version.txt
+          cp version/changelog.txt /tmp/version-branch/changelog.txt
+
+          cd /tmp/version-branch
+          git init
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b version
+          git add version.txt changelog.txt
+          git commit -m "update version to ${{ steps.bump.outputs.version }}"
+
+          git remote add origin https://x-access-token:${{ secrets.PERSONAL_TOKEN }}@github.com/${{ github.repository }}.git
+          git push -f origin version
+
+      # 7. 构建前端
+      - name: Setup Node
+        if: steps.upstream.outputs.has_changes == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 26
+
+      - name: Build frontend
+        if: steps.upstream.outputs.has_changes == 'true'
+        run: |
+          cd webssh
+          npm install
+          npm run buildOnly
+
+      # 8. 准备 webroot
+      - name: Prepare webroot
+        if: steps.upstream.outputs.has_changes == 'true'
+        run: |
+          rm -rf gossh/webroot/*
+          mkdir -p gossh/webroot
+          cp -r webssh/dist/* gossh/webroot/
+
+      # 9. 构建二进制
+      - name: Setup Go
+        if: steps.upstream.outputs.has_changes == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Build Go binary
+        if: steps.upstream.outputs.has_changes == 'true'
+        run: |
+          cd gossh
+          export CGO_ENABLED=0
+          export GOOS=linux
+          export GOARCH=arm64
+          go env -w GOPROXY=https://goproxy.cn,direct
+          go mod tidy
+          go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o webssh_${VERSION}
+
+      # 10. UPX 压缩
+      - name: Compress binary
+        if: steps.upstream.outputs.has_changes == 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq upx-ucl || sudo apt-get install -y -qq upx
+          cd gossh
+          upx --best --lzma webssh_${VERSION} || true
+
+      # 11. 创建 Release
+      - name: Create Release
+        if: steps.upstream.outputs.has_changes == 'true'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.bump.outputs.version }}
+          name: "WebSSH G5Pro v${{ steps.bump.outputs.version }}"
+          body_path: version/changelog.txt
+          draft: false
+          prerelease: false
+          files: |
+            gossh/webssh_${{ steps.bump.outputs.version }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.PERSONAL_TOKEN }}

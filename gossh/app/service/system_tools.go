@@ -196,7 +196,7 @@ func SystemSmsForwardHandler(c *gin.Context) {
 	var errs []string
 	for _, msg := range targets {
 		title := fmt.Sprintf("短信 %s", msg.Number)
-		text := fmt.Sprintf("来自: %s\n时间: %s\n%s", msg.Number, msg.Date, msg.Content)
+		text := fmt.Sprintf("%s\n时间: %s", msg.Content, msg.Date)
 		if req.BarkEnabled {
 			if err := sendBark(req.BarkURL, title, text); err != nil {
 				errs = append(errs, "Bark: "+err.Error())
@@ -338,7 +338,7 @@ func smsForwardPollOnce() error {
 	var errs []string
 	for _, msg := range targets {
 		title := fmt.Sprintf("短信 %s", msg.Number)
-		text := fmt.Sprintf("来自: %s\n时间: %s\n%s", msg.Number, msg.Date, msg.Content)
+		text := fmt.Sprintf("%s\n时间: %s", msg.Content, msg.Date)
 		if cfg.BarkEnabled {
 			if err := sendBark(cfg.BarkURL, title, text); err != nil {
 				errs = append(errs, "Bark: "+err.Error())

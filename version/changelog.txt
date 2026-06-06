@@ -1,0 +1,7 @@
+## v1.0
+- G5Pro 适配 (WiFi 接口: ra0/rai0/rai1)
+- AMBR/QCI 解析适配 G5Pro 日志格式
+- 接入设备显示信号强度和协商速率
+- MLO 设备 MAC 地址匹配支持
+- 新增 /api/wifi/clients 专用 API
+- 2.4G/5G 速率分别换算

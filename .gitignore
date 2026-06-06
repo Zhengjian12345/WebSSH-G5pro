@@ -1,0 +1,21 @@
+# Binaries
+webssh
+*.exe
+
+# Dependencies
+gossh/webroot/
+webssh/node_modules/
+webssh/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build cache
+gossh/go.sum
+

@@ -1525,7 +1525,7 @@
               该速率仅供参考，MLO 连接的设备和有线连接设备无法显示速率。
             </div>
           </template>
-          <span style="display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:rgba(64,158,255,0.15);color:#409eff;font-size:11px;font-weight:bold;cursor:help;">!</span>
+          <span class="settings-help-icon" style="margin-left:4px;">!</span>
         </el-tooltip>
       </div>
     </template>

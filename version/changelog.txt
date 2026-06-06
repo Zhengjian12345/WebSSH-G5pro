@@ -5,3 +5,7 @@
 - MLO 设备 MAC 地址匹配支持
 - 新增 /api/wifi/clients 专用 API
 - 2.4G/5G 速率分别换算
+## v1.01
+- 修复接入设备信号和速率显示
+- 新增 /api/wifi/clients 专用 API
+- MLO 设备 MAC 地址匹配支持

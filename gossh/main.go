@@ -28,7 +28,7 @@ import (
 	"time"
 )
 
-var version = "1.0"
+var version = "1.01"
 
 const (
 	GithubRepo             = "Zhengjian12345/WebSSH-G5pro"

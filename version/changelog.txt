@@ -1,11 +1,18 @@
-## v1.0
-- G5Pro 适配 (WiFi 接口: ra0/rai0/rai1)
-- AMBR/QCI 解析适配 G5Pro 日志格式
-- 接入设备显示信号强度和协商速率
-- MLO 设备 MAC 地址匹配支持
-- 新增 /api/wifi/clients 专用 API
-- 2.4G/5G 速率分别换算
-## v1.01
+## v0.03
+- 隐藏ADB按钮
+- 隐藏短信转发Tab
+- 已连接设备添加速率说明提示
+- Release文件名统一为webssh_g5Pro
+## v0.02
+- CPU温度卡片改为左环形图+右折线图布局
+- 隐藏电池图标/温度
+- 隐藏WiFi性能模式/发射功率/国家码
+## v0.01
 - 修复接入设备信号和速率显示
 - 新增 /api/wifi/clients 专用 API
 - MLO 设备 MAC 地址匹配支持
+## v0.00
+- G5Pro 适配 (WiFi 接口: ra0/rai0/rai1)
+- AMBR/QCI 解析适配 G5Pro 日志格式
+- 接入设备显示信号强度和协商速率
+- 2.4G/5G 速率分别换算

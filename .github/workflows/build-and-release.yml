@@ -1,6 +1,8 @@
 name: Build & Release WebSSH
 
 on:
+  push:
+    branches: [ "main", "master" ]
   workflow_dispatch:
 
 permissions:
@@ -92,7 +94,7 @@ jobs:
           go env -w GOPROXY=https://goproxy.cn,direct
           go mod tidy
 
-          go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o webssh_g5Pro
+          go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o webssh_${VERSION}
 
       # 8. UPX 压缩（可选）
       - name: Install UPX
@@ -103,7 +105,7 @@ jobs:
       - name: Compress binary
         run: |
           cd gossh
-          upx --best --lzma webssh_g5Pro || true
+          upx --best --lzma webssh_${VERSION} || true
       
       # 9. 生成 version.txt
       - name: Generate version file
@@ -140,6 +142,6 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            gossh/webssh_g5Pro
+            gossh/webssh_${{ steps.version.outputs.version }}
         env:
           GITHUB_TOKEN: ${{ secrets.PERSONAL_TOKEN }}

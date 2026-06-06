@@ -36,7 +36,7 @@ const (
 	updateVersionFileURL   = "https://raw.githubusercontent.com/" + GithubRepo + "/main/version/version.txt"
 	updateChangelogFileURL = "https://raw.githubusercontent.com/" + GithubRepo + "/main/version/changelog.txt"
 	updateLatestReleaseURL = "https://github.com/" + GithubRepo + "/releases/latest"
-	updateDownloadBaseURL  = "https://github.com/" + GithubRepo + "/releases/latest/download/webssh_g5Pro"
+	updateDownloadBaseURL  = "https://github.com/" + GithubRepo + "/releases/latest/download/webssh_"
 )
 
 type GithubAsset struct {
@@ -246,9 +246,9 @@ func isSafeUpdateVersion(v string) bool {
 
 func updateAssetForVersion(latestVersion string) GithubAsset {
 	return GithubAsset{
-		Name:               "webssh_g5Pro",
+		Name:               "webssh_" + latestVersion,
 		Size:               0,
-		BrowserDownloadURL: updateDownloadBaseURL,
+		BrowserDownloadURL: updateDownloadBaseURL + latestVersion,
 	}
 }
 

@@ -181,7 +181,7 @@ jobs:
           export GOARCH=arm64
           go env -w GOPROXY=https://goproxy.cn,direct
           go mod tidy
-          go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o webssh_g5Pro
+          go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o webssh_${VERSION}
 
       # 10. UPX 压缩
       - name: Compress binary
@@ -190,7 +190,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq upx-ucl || sudo apt-get install -y -qq upx
           cd gossh
-          upx --best --lzma webssh_g5Pro || true
+          upx --best --lzma webssh_${VERSION} || true
 
       # 11. 创建 Release
       - name: Create Release
@@ -203,6 +203,6 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            gossh/webssh_g5Pro
+            gossh/webssh_${{ steps.bump.outputs.version }}
         env:
           GITHUB_TOKEN: ${{ secrets.PERSONAL_TOKEN }}

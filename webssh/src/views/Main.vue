@@ -874,6 +874,10 @@
               <span class="value">{{ simInfo2.sim_iccid ?? '-' }}</span>
             </div>
             <div class="info-item">
+              <span class="label">SIM 卡号</span>
+              <span class="value">{{simInfo?.values?.msisdn ?? '-'}}</span>
+            </div>
+            <div class="info-item">
               <span class="label">IMSI</span>
               <span class="value">{{ simInfo2.sim_imsi ?? '-' }}</span>
             </div>
@@ -885,12 +889,6 @@
             <div class="info-item">
               <span class="label">Modem MSN</span>
               <span class="value">{{ simInfo?.values?.modem_msn ?? '-' }}</span>
-            </div>
-            <div class="info-item">
-              <span class="label">WLAN MAC</span>
-              <span class="value">{{
-                simInfo?.values?.wlan_mac_address ?? '-'
-              }}</span>
             </div>
             <div class="info-item">
               <span class="label">系统版本</span>
@@ -1893,6 +1891,7 @@ interface SimInfo {
     imei2: string;
     lock_status: string;
     modem_msn: string;
+    msisdn: string;
     wlan_mac_address: string;
   };
 }

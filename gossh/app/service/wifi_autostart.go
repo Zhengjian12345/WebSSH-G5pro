@@ -33,7 +33,7 @@ func InitWifiSettingsAutostart() {
 			return
 		}
 
-		if err := waitWifiInterfaces([]string{"wlan0", "wlan2"}, wifiSettingsAutostartMaxWait); err != nil {
+		if err := waitWifiInterfaces([]string{"ra0", "rai0"}, wifiSettingsAutostartMaxWait); err != nil {
 			slog.Warn("wifi settings autostart: wifi interfaces not ready", "err", err)
 			return
 		}
@@ -97,18 +97,18 @@ func waitWifiInterfaces(ifaces []string, timeout time.Duration) error {
 
 func applyPersistedWifiRuntimeSettings(settings PersistedDeviceSettings) error {
 	if settings.Wifi24Enabled != nil && *settings.Wifi24Enabled {
-		if err := setWifiState("wlan0", true); err != nil {
-			return fmt.Errorf("enable wlan0 failed: %w", err)
+		if err := setWifiState("ra0", true); err != nil {
+			return fmt.Errorf("enable ra0 failed: %w", err)
 		}
 	}
 	if settings.Wifi5Enabled != nil && *settings.Wifi5Enabled {
-		if err := setWifiState("wlan2", true); err != nil {
-			return fmt.Errorf("enable wlan2 failed: %w", err)
+		if err := setWifiState("rai0", true); err != nil {
+			return fmt.Errorf("enable rai0 failed: %w", err)
 		}
 	}
 
 	if mode := wifiPowerSaveMode(settings.WifiPerformance); mode != "" {
-		for _, iface := range []string{"wlan0", "wlan1", "wlan2", "wlan3"} {
+		for _, iface := range []string{"ra0", "rai0", "rai1"} {
 			if err := setPowerSave(iface, mode); err != nil {
 				slog.Warn("wifi settings autostart: set power save failed", "iface", iface, "mode", mode, "err", err)
 			}
@@ -116,13 +116,13 @@ func applyPersistedWifiRuntimeSettings(settings PersistedDeviceSettings) error {
 	}
 
 	if settings.Wifi24Enabled != nil {
-		if err := setWifiState("wlan0", *settings.Wifi24Enabled); err != nil {
-			return fmt.Errorf("set wlan0 state failed: %w", err)
+		if err := setWifiState("ra0", *settings.Wifi24Enabled); err != nil {
+			return fmt.Errorf("set ra0 state failed: %w", err)
 		}
 	}
 	if settings.Wifi5Enabled != nil {
-		if err := setWifiState("wlan2", *settings.Wifi5Enabled); err != nil {
-			return fmt.Errorf("set wlan2 state failed: %w", err)
+		if err := setWifiState("rai0", *settings.Wifi5Enabled); err != nil {
+			return fmt.Errorf("set rai0 state failed: %w", err)
 		}
 	}
 	return nil

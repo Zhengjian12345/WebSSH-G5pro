@@ -28,13 +28,13 @@ import (
 	"time"
 )
 
-var version = "dev"
+var version = "0.04"
 
 const (
-	GithubRepo             = "Jack-bin183/WebSSH-u60pro"
+	GithubRepo             = "Zhengjian12345/WebSSH-G5pro"
 	updateConnectTimeout   = 3 * time.Second
-	updateVersionFileURL   = "https://raw.githubusercontent.com/" + GithubRepo + "/version/version.txt"
-	updateChangelogFileURL = "https://raw.githubusercontent.com/" + GithubRepo + "/version/changelog.txt"
+	updateVersionFileURL   = "https://raw.githubusercontent.com/" + GithubRepo + "/main/version/version.txt"
+	updateChangelogFileURL = "https://raw.githubusercontent.com/" + GithubRepo + "/main/version/changelog.txt"
 	updateReleaseURL       = "https://github.com/" + GithubRepo + "/releases/latest"
 	updateDownloadBaseURL  = "https://github.com/" + GithubRepo + "/releases/latest/download/webssh_"
 )
@@ -903,6 +903,7 @@ func main() {
 		auth.GET("/api/wifi/settings", service.WifiUciGetHandler)
 		auth.POST("/api/wifi/settings", service.WifiSettingsSetHandler)
 		auth.POST("/api/net/ambr/get", service.NetAmbrGetHandler)
+		auth.GET("/api/wifi/clients", service.WifiClientsHandler)
 		auth.GET("/api/speedtest", service.SpeedTestHandler)
 		auth.GET("/api/system/sms", service.SystemSmsListHandler)
 		auth.POST("/api/system/sms/forward", service.SystemSmsForwardHandler)

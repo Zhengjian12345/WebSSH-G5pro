@@ -33,8 +33,8 @@ var version = "0.04"
 const (
 	GithubRepo             = "Zhengjian12345/WebSSH-G5pro"
 	updateConnectTimeout   = 3 * time.Second
-	updateVersionFileURL   = "https://raw.githubusercontent.com/" + GithubRepo + "/main/version/version.txt"
-	updateChangelogFileURL = "https://raw.githubusercontent.com/" + GithubRepo + "/main/version/changelog.txt"
+	updateVersionFileURL   = "https://raw.githubusercontent.com/" + GithubRepo + "/version/version.txt"
+	updateChangelogFileURL = "https://raw.githubusercontent.com/" + GithubRepo + "/version/changelog.txt"
 	updateReleaseURL       = "https://github.com/" + GithubRepo + "/releases/latest"
 	updateDownloadBaseURL  = "https://github.com/" + GithubRepo + "/releases/latest/download/webssh_"
 )

@@ -21,7 +21,7 @@
             <span class="uptime-label">{{ netWorkProvider }} {{ networkType }}{{ is5GA ? 'A' : '' }}</span>
           </div>
 
-          <div style="display: flex; align-items: center">
+          <div v-if="false" style="display: flex; align-items: center">
             <div
               :class="[
                 'battery',
@@ -59,6 +59,7 @@
           </button>
 
           <button
+            v-if="false"
             class="quick-action-button adb-action-button"
             :class="{ active: usbStatus?.connect == 1 }"
             @click="handleOpenAdbClick"
@@ -91,7 +92,6 @@
           </button>
 
           <button
-            v-if="mmEntryUnlocked"
             class="quick-action-button mm-action-button"
             :class="{ active: mmStatus.running }"
             @click="openMmDialog"
@@ -711,7 +711,7 @@
               <div class="health-card temp-health-card">
                 <div class="health-title">温度状态</div>
 
-                <div class="temp-gauges">
+                <div class="temp-gauges temp-gauges-wide">
                   <div class="temp-gauge">
                     <div
                       class="temp-ring"
@@ -728,22 +728,28 @@
                     </div>
                   </div>
 
-                  <div class="temp-gauge">
-                    <div
-                      class="temp-ring"
-                      :class="getTempClass(Number(deviceInfo.bat_temperature))"
-                      :style="{ '--percent': getTempPercent(Number(deviceInfo.bat_temperature)) + '%' }"
-                    >
-                      <div class="temp-ring-inner">
-                        <strong>{{ deviceInfo.bat_temperature || '-' }}°</strong>
-                        <span>电池</span>
-                      </div>
+                  <div class="temp-chart">
+                    <div class="temp-chart-head">
+                      <span>温度趋势</span>
+                      <span v-if="cpuTempChart.max > 0" class="temp-chart-peak">峰值 {{ cpuTempChart.max.toFixed(1) }}°C</span>
                     </div>
-                    <div
-                      class="temp-state"
-                      :class="getTempClass(Number(deviceInfo.bat_temperature))"
-                    >
-                      {{ getTempText(Number(deviceInfo.bat_temperature)) }}
+                    <div class="temp-chart-plot">
+                      <div class="temp-ylabels">
+                        <span v-for="g in cpuTempChart.ygrid" :key="'tyl-' + g.y" :style="{ top: g.y + 'px' }">{{ g.label }}</span>
+                      </div>
+                      <div class="temp-main">
+                        <svg class="temp-chart-svg" :viewBox="`0 0 ${TEMP_CHART_W} ${TEMP_CHART_H}`" preserveAspectRatio="none">
+                          <g class="temp-grid">
+                            <line v-for="g in cpuTempChart.xgrid" :key="'tvx-' + g.x" :x1="g.x" y1="0" :x2="g.x" :y2="TEMP_CHART_H" />
+                            <line v-for="g in cpuTempChart.ygrid" :key="'thy-' + g.y" x1="0" :y1="g.y" :x2="TEMP_CHART_W" :y2="TEMP_CHART_H" />
+                          </g>
+                          <polyline v-if="cpuTempChart.area" :points="cpuTempChart.area" class="temp-area" />
+                          <polyline :points="cpuTempChart.points" class="temp-line" vector-effect="non-scaling-stroke" />
+                        </svg>
+                        <div class="temp-xlabels">
+                          <span v-for="g in cpuTempChart.xgrid" :key="'txl-' + g.x" :style="{ left: g.xPct + '%' }">{{ g.label }}</span>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1403,7 +1409,7 @@
           </div>
         </section>
       </div>
-      <section class="settings-section">
+      <section v-if="false" class="settings-section">
         <div class="wifi-tuning-grid">
           <div class="wifi-tuning-item">
             <div class="settings-title-row">
@@ -1578,7 +1584,7 @@
         </div>
       </el-tab-pane>
 
-      <el-tab-pane label="短信转发" name="sms">
+      <el-tab-pane v-if="false" label="短信转发" name="sms">
         <div class="system-tool-panel">
           <div class="settings-section-title">短信转发</div>
           <div class="sms-forward-grid">
@@ -1668,11 +1674,20 @@
   <!-- ───────── 已连接设备弹窗（无线 + 有线） ───────── -->
   <el-dialog
     v-model="deviceDialogVisible"
-    title="已连接设备"
     width="min(680px, 96vw)"
     :close-on-click-modal="true"
     destroy-on-close
     class="wireless-dialog">
+    <template #header>
+      <div class="el-dialog__title" style="display:inline-flex;align-items:center;gap:6px;">
+        已连接设备
+        <el-tooltip
+          content="该速率仅供参考，MLO 连接的设备和有线连接设备无法显示速率。"
+          placement="top">
+          <span class="settings-help-icon">!</span>
+        </el-tooltip>
+      </div>
+    </template>
 
     <div v-if="deviceListLoading" style="text-align:center;padding:32px 0;">
       <div class="loading-spinner" style="width:32px;height:32px;border-width:3px;margin:0 auto 12px;"></div>
@@ -2264,6 +2279,12 @@ const speedCurve = ref<{ t: number; v: number }[]>([]);
 const SPEED_CHART_W = 300;
 const SPEED_CHART_H = 90;
 const SPEED_CURVE_MAX_POINTS = 600;   // 循环测速时只保留最近这么多点（约 150s）
+
+// CPU 温度历史采样点：t=时间戳（横轴），v=温度 °C（纵轴）
+const cpuTempCurve = ref<{ t: number; v: number }[]>([]);
+const TEMP_CHART_W = 300;
+const TEMP_CHART_H = 90;
+const TEMP_CURVE_MAX_POINTS = 300;   // 保留最近 300 个点（约 5 分钟 @ 1s 刷新）
 const speedChart = computed(() => {
   const data = speedCurve.value;
   const n = data.length;
@@ -2298,6 +2319,46 @@ const speedChart = computed(() => {
     points += (i ? ' ' : '') + xOf(data[i].t).toFixed(1) + ',' + (SPEED_CHART_H - (data[i].v / niceMax) * SPEED_CHART_H).toFixed(1);
   }
   const area = n > 1 ? `0,${SPEED_CHART_H} ${points} ${SPEED_CHART_W},${SPEED_CHART_H}` : '';
+  return { points, area, max, niceMax, ygrid, xgrid, hasData: n > 1 };
+});
+
+const cpuTempChart = computed(() => {
+  const data = cpuTempCurve.value;
+  const n = data.length;
+  // ── 纵轴（温度）：固定范围 30~100°C，漂亮刻度 ──
+  const tMinFixed = 30;
+  const tMaxFixed = 100;
+  const yRange = tMaxFixed - tMinFixed;
+  const yStep = niceStep(yRange, 4);
+  const niceMax = tMaxFixed;
+  const ygrid: { y: number; label: string }[] = [];
+  for (let v = tMinFixed; v <= niceMax + yStep * 1e-6; v += yStep) {
+    ygrid.push({ y: +(TEMP_CHART_H - ((v - tMinFixed) / yRange) * TEMP_CHART_H).toFixed(2), label: fmtAxis(v) });
+  }
+  if (n === 0) return { points: '', area: '', max: 0, niceMax, ygrid, xgrid: [], hasData: false };
+
+  // ── 横轴（时间）：用样本实际时间戳，漂亮时间刻度 ──
+  const tMin = data[0].t;
+  const tMax = data[n - 1].t;
+  const span = tMax - tMin;
+  const xOf = (t: number) => (span > 0 ? ((t - tMin) / span) * TEMP_CHART_W : 0);
+  const xgrid: { x: number; xPct: number; label: string }[] = [];
+  if (span > 0) {
+    const xStep = niceStep(span, 6);
+    for (let t = Math.ceil(tMin / xStep) * xStep; t <= tMax + xStep * 1e-6; t += xStep) {
+      const x = xOf(t);
+      xgrid.push({ x: +x.toFixed(2), xPct: +((x / TEMP_CHART_W) * 100).toFixed(2), label: fmtTime(t) });
+    }
+  }
+
+  // ── 曲线 ──
+  let points = '';
+  for (let i = 0; i < n; i++) {
+    const yVal = Math.max(tMinFixed, Math.min(tMaxFixed, data[i].v));
+    points += (i ? ' ' : '') + xOf(data[i].t).toFixed(1) + ',' + (TEMP_CHART_H - ((yVal - tMinFixed) / yRange) * TEMP_CHART_H).toFixed(1);
+  }
+  const area = n > 1 ? `0,${TEMP_CHART_H} ${points} ${TEMP_CHART_W},${TEMP_CHART_H}` : '';
+  const max = data.reduce((m, p) => Math.max(m, p.v), 0);
   return { points, area, max, niceMax, ygrid, xgrid, hasData: n > 1 };
 });
 
@@ -3862,6 +3923,14 @@ async function fetchAllData() {
     trafficData.value = resultMap[5]
     deviceInfo.value  = resultMap[6]
     cpuTemp.value     = resultMap[7]
+    // 记录 CPU 温度历史
+    if (typeof cpuTemp.value?.cpuss_temp === 'number') {
+      const now = Date.now() / 1000;
+      cpuTempCurve.value.push({ t: now, v: cpuTemp.value.cpuss_temp });
+      if (cpuTempCurve.value.length > TEMP_CURVE_MAX_POINTS) {
+        cpuTempCurve.value = cpuTempCurve.value.slice(-TEMP_CURVE_MAX_POINTS);
+      }
+    }
     simInfo.value     = resultMap[8]
     simInfo2.value    = resultMap[9]
     wwanInfo.value    = resultMap[10]
@@ -4738,6 +4807,8 @@ onMounted(() => {
   psmGetHandler();
   // 获取签约速率
   netAmbrGetHandler();
+  // G5Pro: 直接加载 Mihomo 状态（彩蛋已解锁）
+  loadMmStatus();
 });
 
 onUnmounted(() => {
@@ -6304,6 +6375,103 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
+}
+
+.temp-gauges-wide {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr);
+}
+
+.temp-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.temp-chart-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(255,255,255,0.6);
+}
+
+.temp-chart-peak {
+  font-size: 11px;
+  color: rgba(255,255,255,0.45);
+  font-weight: 600;
+}
+
+.temp-chart-plot {
+  display: flex;
+  gap: 6px;
+  flex: 1;
+  min-height: 0;
+}
+
+.temp-ylabels {
+  position: relative;
+  width: 28px;
+  flex-shrink: 0;
+}
+
+.temp-ylabels span {
+  position: absolute;
+  right: 0;
+  transform: translateY(-50%);
+  font-size: 9px;
+  color: rgba(255,255,255,0.35);
+  line-height: 1;
+}
+
+.temp-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.temp-chart-svg {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex: 1;
+  overflow: visible;
+}
+
+.temp-grid line {
+  stroke: rgba(255,255,255,0.08);
+  stroke-width: 1;
+}
+
+.temp-line {
+  fill: none;
+  stroke: #ff6b6b;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.temp-area {
+  fill: rgba(255, 107, 107, 0.15);
+  stroke: none;
+}
+
+.temp-xlabels {
+  position: relative;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.temp-xlabels span {
+  position: absolute;
+  top: 2px;
+  transform: translateX(-50%);
+  font-size: 9px;
+  color: rgba(255,255,255,0.35);
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .temp-gauge {

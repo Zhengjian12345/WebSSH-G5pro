@@ -161,13 +161,14 @@ func WifiStateSetHandler(c *gin.Context) {
 }
 
 // WifiClientsGetHandler 获取所有无线频段的客户端信息（信号+速率）
-// 使用 iwinfo assoclist 获取信号和速率，返回格式与前端 buildRfMapFromApiResponse 兼容
+// 使用 iw dev {iface} station dump 获取信号和速率（iwinfo assoclist 在 G5Pro 上不可用）
+// 返回格式与前端 buildRfMapFromApiResponse 兼容
 func WifiClientsGetHandler(c *gin.Context) {
 	ifaces := []string{"ra0", "rai0", "rai1"}
 	allClients := make(map[string]interface{})
 
 	for _, iface := range ifaces {
-		clients := parseIwinfoAssoclist(iface)
+		clients := parseIwStationDump(iface)
 		allClients[iface] = gin.H{
 			"clients": clients,
 		}
@@ -179,15 +180,16 @@ func WifiClientsGetHandler(c *gin.Context) {
 	})
 }
 
-// parseIwinfoAssoclist 解析 iwinfo {iface} assoclist 的文本输出
+// parseIwStationDump 解析 iw dev {iface} station dump 的文本输出
 // 输出格式:
-//   AA:BB:CC:DD:EE:FF -68 dBm / -95 dBm (SNR 27) 120 ms ago
-//    RX: 72.0 MBit/s 100 Pkts.
-//    TX: 58.0 MBit/s 200 Pkts.
+//   Station AA:BB:CC:DD:EE:FF (on ra0)
+//       signal: -68 dBm
+//       tx bitrate: 2402 MBit/s MCS 15 160MHz HE-NSS 2 HE-GI 0
+//       rx bitrate: 1201 MBit/s MCS 11 80MHz HE-NSS 2 HE-GI 0
 // 返回 MAC -> {signal, rate: {tx, rx}} 映射
-func parseIwinfoAssoclist(iface string) map[string]interface{} {
+func parseIwStationDump(iface string) map[string]interface{} {
 	clients := make(map[string]interface{})
-	cmd := exec.Command("sh", "-c", fmt.Sprintf("iwinfo %s assoclist 2>/dev/null", iface))
+	cmd := exec.Command("sh", "-c", fmt.Sprintf("iw dev %s station dump 2>/dev/null", iface))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return clients
@@ -202,75 +204,65 @@ func parseIwinfoAssoclist(iface string) map[string]interface{} {
 			continue
 		}
 
-		// 匹配 MAC 地址行: AA:BB:CC:DD:EE:FF -68 dBm ...
-		if mac := extractMacFromAssocLine(line); mac != "" {
-			currentMac = mac
-			// 提取信号强度
-			signal := extractSignalFromAssocLine(line)
-			if _, exists := clients[currentMac]; !exists {
+		// 匹配 Station 行: Station AA:BB:CC:DD:EE:FF (on ra0)
+		if strings.HasPrefix(line, "Station ") {
+			re := regexp.MustCompile(`Station\s+([0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2})`)
+			matches := re.FindStringSubmatch(line)
+			if len(matches) >= 2 {
+				currentMac = strings.ToUpper(matches[1])
 				clients[currentMac] = map[string]interface{}{
-					"signal": signal,
-					"rate":   map[string]interface{}{"tx": 0, "rx": 0},
+					"signal": 0.0,
+					"rate":   map[string]interface{}{"tx": 0.0, "rx": 0.0},
 				}
-			} else {
-				clients[currentMac].(map[string]interface{})["signal"] = signal
 			}
 			continue
 		}
 
-		// 匹配速率行: RX: 72.0 MBit/s 或 TX: 58.0 MBit/s
-		if currentMac != "" {
-			if strings.HasPrefix(line, "RX:") {
-				rate := extractRateFromLine(line)
-				if rate > 0 {
-					setNestedRate(clients, currentMac, "rx", rate)
-				}
-			} else if strings.HasPrefix(line, "TX:") {
-				rate := extractRateFromLine(line)
-				if rate > 0 {
-					setNestedRate(clients, currentMac, "tx", rate)
+		if currentMac == "" {
+			continue
+		}
+
+		// 匹配信号行: signal: -68 dBm  或  signal avg: -65 dBm
+		if strings.HasPrefix(line, "signal:") && !strings.HasPrefix(line, "signal avg:") && !strings.HasPrefix(line, "signal ") {
+			re := regexp.MustCompile(`signal:\s+(-?\d+(?:\.\d+)?)\s*dBm`)
+			matches := re.FindStringSubmatch(line)
+			if len(matches) >= 2 {
+				val, err := strconv.ParseFloat(matches[1], 64)
+				if err == nil {
+					setNestedField(clients, currentMac, "signal", val)
 				}
 			}
+			continue
+		}
+
+		// 匹配 tx bitrate: 2402 MBit/s MCS 15 ...
+		if strings.HasPrefix(line, "tx bitrate:") {
+			re := regexp.MustCompile(`tx bitrate:\s+(\d+(?:\.\d+)?)\s*MBit/s`)
+			matches := re.FindStringSubmatch(line)
+			if len(matches) >= 2 {
+				val, err := strconv.ParseFloat(matches[1], 64)
+				if err == nil {
+					setNestedRate(clients, currentMac, "tx", val)
+				}
+			}
+			continue
+		}
+
+		// 匹配 rx bitrate: 1201 MBit/s MCS 11 ...
+		if strings.HasPrefix(line, "rx bitrate:") {
+			re := regexp.MustCompile(`rx bitrate:\s+(\d+(?:\.\d+)?)\s*MBit/s`)
+			matches := re.FindStringSubmatch(line)
+			if len(matches) >= 2 {
+				val, err := strconv.ParseFloat(matches[1], 64)
+				if err == nil {
+					setNestedRate(clients, currentMac, "rx", val)
+				}
+			}
+			continue
 		}
 	}
 
 	return clients
-}
-
-func extractMacFromAssocLine(line string) string {
-	// MAC 地址格式: XX:XX:XX:XX:XX:XX
-	re := regexp.MustCompile(`^([0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2})`)
-	matches := re.FindStringSubmatch(line)
-	if len(matches) >= 2 {
-		return strings.ToUpper(matches[1])
-	}
-	return ""
-}
-
-func extractSignalFromAssocLine(line string) float64 {
-	// 信号格式: -68 dBm
-	re := regexp.MustCompile(`(-?\d+)\s*dBm`)
-	matches := re.FindStringSubmatch(line)
-	if len(matches) >= 2 {
-		val, err := strconv.ParseFloat(matches[1], 64)
-		if err == nil {
-			return val
-		}
-	}
-	return 0
-}
-
-func extractRateFromLine(line string) float64 {
-	// 速率格式: 72.0 MBit/s 或 2402 MBit/s
-	re := regexp.MustCompile(`(\d+(?:\.\d+)?)\s*MBit/s`)
-	matches := re.FindStringSubmatch(line)
-	if len(matches) >= 2 {
-		val, err := strconv.ParseFloat(matches[1], 64)
-		if err == nil {
-			return val
-		}
-	}
-	return 0
 }
 
 func setNestedRate(clients map[string]interface{}, mac, direction string, rate float64) {
@@ -279,6 +271,14 @@ func setNestedRate(clients map[string]interface{}, mac, direction string, rate f
 			if rateMap, ok := entryMap["rate"].(map[string]interface{}); ok {
 				rateMap[direction] = rate
 			}
+		}
+	}
+}
+
+func setNestedField(clients map[string]interface{}, mac, field string, value interface{}) {
+	if entry, exists := clients[mac]; exists {
+		if entryMap, ok := entry.(map[string]interface{}); ok {
+			entryMap[field] = value
 		}
 	}
 }

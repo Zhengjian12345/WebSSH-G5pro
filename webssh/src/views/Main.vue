@@ -2308,7 +2308,7 @@ const speedChart = computed(() => {
     const xStep = niceStep(span, 6);
     for (let t = Math.ceil(tMin / xStep) * xStep; t <= tMax + xStep * 1e-6; t += xStep) {
       const x = xOf(t);
-      xgrid.push({ x: +x.toFixed(2), xPct: +((x / SPEED_CHART_W) * 100).toFixed(2), label: fmtTime(t) });
+      xgrid.push({ x: +x.toFixed(2), xPct: +((x / SPEED_CHART_W) * 100).toFixed(2), label: fmtTime(t, tMin) });
     }
   }
 
@@ -2346,7 +2346,7 @@ const cpuTempChart = computed(() => {
     const xStep = niceStep(span, 6);
     for (let t = Math.ceil(tMin / xStep) * xStep; t <= tMax + xStep * 1e-6; t += xStep) {
       const x = xOf(t);
-      xgrid.push({ x: +x.toFixed(2), xPct: +((x / TEMP_CHART_W) * 100).toFixed(2), label: fmtTime(t) });
+      xgrid.push({ x: +x.toFixed(2), xPct: +((x / TEMP_CHART_W) * 100).toFixed(2), label: fmtTime(t, tMin) });
     }
   }
 
@@ -2374,8 +2374,12 @@ function fmtAxis(v: number): string {
   if (v <= 0) return '0';
   return Number.isInteger(v) ? String(v) : v.toFixed(1);
 }
-function fmtTime(v: number): string {
-  return (Number.isInteger(v) ? String(v) : v.toFixed(1)) + 's';
+function fmtTime(v: number, tMin: number): string {
+  // 显示相对于起始时间的秒数，如 0s, 60s, 120s
+  const rel = Math.round(v - tMin);
+  if (rel < 60) return rel + 's';
+  if (rel < 3600) return Math.floor(rel / 60) + 'm';
+  return Math.floor(rel / 3600) + 'h';
 }
 
 function openSystemToolsDialog(tab: SystemToolsTab = 'speedtest') {

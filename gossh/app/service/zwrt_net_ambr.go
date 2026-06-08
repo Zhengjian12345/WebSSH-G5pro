@@ -52,7 +52,7 @@ func NetAmbrGetHandler(c *gin.Context) {
 
 // 1.1 获取最新ambr
 func getLatestAmbr() (string, error) {
-	cmd := exec.Command("sh", "-c", `grep "dnn=.*session_ambr" /data/logfs/key.log 2>/dev/null | grep -v "dnn=ims" | tail -n 1`)
+	cmd := exec.Command("sh", "-c", `grep "dnn=.*session_ambr" /logfs/key.log 2>/dev/null | grep -v "dnn=ims" | tail -n 1`)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("get ambr error: %s", string(out))
@@ -78,7 +78,7 @@ func parseAmbr(line string) (float64, float64, string, int, string, int) {
 
 // 2.1 获取最新qci
 func getLatestQci() (string, error) {
-	cmd := exec.Command("sh", "-c", `grep -hEi "qci|5qi" /data/logfs/key.log 2>/dev/null | tail -n 1`)
+	cmd := exec.Command("sh", "-c", `grep -hEi "qci|5qi" /logfs/key.log 2>/dev/null | tail -n 1`)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("get ambr error: %s", string(out))

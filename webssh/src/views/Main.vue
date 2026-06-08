@@ -1944,12 +1944,11 @@ interface LanUserList {
   guest_num_6g: number;
 }
 
-// WiFi状态
+// WiFi状态 (G5Pro适配: ra0=2.4G, rai0=5G)
 interface WifiInfo {
-  wlan0: string
-  wlan1: string
-  wlan2: string
-  wlan3: string
+  ra0: string
+  rai0: string
+  rai1: string
   wifiStatus24: boolean
   wifiStatus5: boolean
   highPerformance: boolean
@@ -3567,7 +3566,7 @@ async function applyWifiSettings() {
 
 async function setWifiPerformance(highPerformance: boolean) {
   const res = await axios.post('/api/wifi/psm/set', {
-    ifaces: ['wlan0', 'wlan1', 'wlan2', 'wlan3'],
+    ifaces: ['ra0', 'rai0', 'rai1'],
     mode: highPerformance ? 'off' : 'on',
   });
   if (res.data.code !== 0) throw new Error(res.data.msg || 'WiFi 性能模式应用失败');
@@ -3611,7 +3610,7 @@ async function setWifiCountrySettings() {
 async function applyWifi24State() {
   wifiSettingsSaving.value = 'radio24';
   try {
-    await setWifiRadioState('wlan0', wifiForm.wifi24_enabled);
+    await setWifiRadioState('ra0', wifiForm.wifi24_enabled);
     await persistDeviceSettings();
     setTimeout(psmGetHandler, 2500);
     ElMessage.success('2.4G WiFi 设置已立即生效');
@@ -3625,7 +3624,7 @@ async function applyWifi24State() {
 async function applyWifi5State() {
   wifiSettingsSaving.value = 'radio5';
   try {
-    await setWifiRadioState('wlan2', wifiForm.wifi5_enabled);
+    await setWifiRadioState('rai0', wifiForm.wifi5_enabled);
     await persistDeviceSettings();
     setTimeout(psmGetHandler, 2500);
     ElMessage.success('5G WiFi 设置已立即生效');
@@ -3692,8 +3691,8 @@ async function saveAndApplyWifiSettings() {
   wifiSettingsSaving.value = 'all';
   try {
     await setWifiPerformance(wifiForm.high_performance);
-    await setWifiRadioState('wlan0', wifiForm.wifi24_enabled);
-    await setWifiRadioState('wlan2', wifiForm.wifi5_enabled);
+    await setWifiRadioState('ra0', wifiForm.wifi24_enabled);
+    await setWifiRadioState('rai0', wifiForm.wifi5_enabled);
     await setWifiUciSettings();
     await persistDeviceSettings();
     psmGetHandler();
@@ -4464,24 +4463,23 @@ function netAmbrGetHandler() {
     })
 }
 function psmGetHandler() {
-  axios.post('/api/wifi/psm/get', { ifaces: ['wlan0', 'wlan1', 'wlan2', 'wlan3'], })
+  axios.post('/api/wifi/psm/get', { ifaces: ['ra0', 'rai0', 'rai1'], })
     .then((res) => {
       if (res.data.code !== 0) return;
       const data = res.data.data;
-      wifiInfo.value.wlan0 = data.wlan0_psm;
-      wifiInfo.value.wlan1 = data.wlan1_psm;
-      wifiInfo.value.wlan2 = data.wlan2_psm;
-      wifiInfo.value.wlan3 = data.wlan3_psm;
+      wifiInfo.value.ra0 = data.ra0_psm;
+      wifiInfo.value.rai0 = data.rai0_psm;
+      wifiInfo.value.rai1 = data.rai1_psm;
 
-      // 2.4G: wlan0
-      wifiInfo.value.wifiStatus24 = data.wlan0_status === 'up';
-      // 5G: wlan2
-      wifiInfo.value.wifiStatus5 = data.wlan2_status === 'up';
+      // 2.4G: ra0
+      wifiInfo.value.wifiStatus24 = data.ra0_status === 'up';
+      // 5G: rai0
+      wifiInfo.value.wifiStatus5 = data.rai0_status === 'up';
       wifiForm.wifi24_enabled = wifiInfo.value.wifiStatus24;
       wifiForm.wifi5_enabled = wifiInfo.value.wifiStatus5;
 
       // psm
-      wifiInfo.value.highPerformance = data.wlan2_psm === 'off';
+      wifiInfo.value.highPerformance = data.rai0_psm === 'off';
       wifiForm.high_performance = wifiInfo.value.highPerformance;
     })
 }
@@ -4491,7 +4489,7 @@ async function psmSetHandler(val:boolean, showMessage: boolean = true){
   wifiSettingsSaving.value = 'psm';
   try {
     const res = await axios.post('/api/wifi/psm/set', {
-      ifaces: ['wlan0', 'wlan1', 'wlan2', 'wlan3'],
+      ifaces: ['ra0', 'rai0', 'rai1'],
       mode: val ? 'off' : 'on',
     });
     if (res.data.code !== 0) throw new Error(res.data.msg || 'WiFi 性能模式切换失败');
@@ -4510,9 +4508,9 @@ function wifiStateSetHandler(iface:string, val:boolean){
     up: val,
   }).then((res) => {
     psmGetHandler()
-    if (iface === 'wlan0') wifiForm.wifi24_enabled = val;
-    if (iface === 'wlan2') wifiForm.wifi5_enabled = val;
-    ElMessage.success((iface == 'wlan0' ? '2.4G' : ((iface == 'wlan2' ? '5G' : '其他'))) + '-WiFi已' + (val ? '开启' : '关闭'));
+    if (iface === 'ra0') wifiForm.wifi24_enabled = val;
+    if (iface === 'rai0') wifiForm.wifi5_enabled = val;
+    ElMessage.success((iface == 'ra0' ? '2.4G' : ((iface == 'rai0' ? '5G' : '其他'))) + '-WiFi已' + (val ? '开启' : '关闭'));
   });
 }
 function clampPercent(value: number) {
@@ -4622,7 +4620,7 @@ function signalClass(signal?: number): string {
 // 归一化 MAC：去分隔符 + 大写，兼容 ZTE 列表与 iwinfo 之间冒号/横线/大小写差异
 const normMac = (m: any) => String(m || '').toUpperCase().replace(/[^0-9A-F]/g, '');
 
-// 从 iwinfo assoclist 的批量结果（id 100=wlan0/2.4G、101=wlan2/5G）里，
+// 从 iwinfo assoclist 的批量结果（id 100=ra0/2.4G、101=rai0/5G）里，
 // 按 MAC 建立 信号 + 下行协商速率(AP→终端) 索引
 function buildRfMap(resultMap: Record<number, any>): Record<string, { signal: number; txRate: number }> {
   const rfMap: Record<string, { signal: number; txRate: number }> = {};
@@ -4644,8 +4642,8 @@ function buildRfMap(resultMap: Record<number, any>): Record<string, { signal: nu
 // 只拉两个频段的 iwinfo assoclist（弹窗每秒刷新用，比整张设备列表轻）
 async function fetchWirelessRfMap(): Promise<Record<string, { signal: number; txRate: number }>> {
   const resultMap = await callUbusBatch([
-    { jsonrpc: '2.0', id: 100, method: 'call', params: [SESSION_ID, 'iwinfo', 'assoclist', { device: 'wlan0' }] },
-    { jsonrpc: '2.0', id: 101, method: 'call', params: [SESSION_ID, 'iwinfo', 'assoclist', { device: 'wlan2' }] },
+    { jsonrpc: '2.0', id: 100, method: 'call', params: [SESSION_ID, 'iwinfo', 'assoclist', { device: 'ra0' }] },
+    { jsonrpc: '2.0', id: 101, method: 'call', params: [SESSION_ID, 'iwinfo', 'assoclist', { device: 'rai0' }] },
   ]);
   return buildRfMap(resultMap);
 }
@@ -4713,19 +4711,19 @@ async function openDeviceDialog() {
           {},
         ],
       },
-      // iwinfo assoclist：U60Pro 上 wlan0=2.4G、wlan2=5G，
+      // iwinfo assoclist：G5Pro 上 ra0=2.4G、rai0=5G，
       // 用来补充每个无线终端的信号值与协商速率（下面按 MAC 匹配）
       {
         jsonrpc: '2.0',
         id: 100,
         method: 'call',
-        params: [SESSION_ID, 'iwinfo', 'assoclist', { device: 'wlan0' }],
+        params: [SESSION_ID, 'iwinfo', 'assoclist', { device: 'ra0' }],
       },
       {
         jsonrpc: '2.0',
         id: 101,
         method: 'call',
-        params: [SESSION_ID, 'iwinfo', 'assoclist', { device: 'wlan2' }],
+        params: [SESSION_ID, 'iwinfo', 'assoclist', { device: 'rai0' }],
       },
     ]);
 

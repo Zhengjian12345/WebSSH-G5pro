@@ -27,6 +27,7 @@ type WifiClient struct {
 var defaultWifiIfaces = []string{"ra0", "rai0", "rai1"}
 
 // WifiClientsHandler GET /api/wifi/clients
+// 返回格式: { code: 0, data: { ra0: { clients: {...} }, rai0: { clients: {...} }, rai1: { clients: {...} } } }
 func WifiClientsHandler(c *gin.Context) {
 	ifaceParam := strings.TrimSpace(c.Query("iface"))
 	var ifaces []string
@@ -36,15 +37,38 @@ func WifiClientsHandler(c *gin.Context) {
 		ifaces = defaultWifiIfaces
 	}
 
-	clients := getWifiClients(ifaces)
+	// 按接口分组获取客户端
+	result := make(map[string]gin.H)
+	for _, iface := range ifaces {
+		iface := strings.TrimSpace(iface)
+		if iface == "" {
+			continue
+		}
+		clients := getClientsForIface(iface)
+		// 转为 MAC -> client 映射（前端期望 object 格式）
+		clientMap := make(map[string]interface{})
+		for _, cl := range clients {
+			clientMap[cl.MAC] = gin.H{
+				"mac":       cl.MAC,
+				"signal":    cl.Signal,
+				"interface": cl.Interface,
+				"connected": cl.Connected,
+				"mlo":       cl.MLO,
+				"rate": gin.H{
+					"rx": cl.RxRate,
+					"tx": cl.TxRate,
+				},
+			}
+		}
+		result[iface] = gin.H{
+			"clients": clientMap,
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code": 0,
 		"msg":  "ok",
-		"data": gin.H{
-			"clients": clients,
-			"ifaces":  ifaces,
-			"count":   len(clients),
-		},
+		"data": result,
 	})
 }
 

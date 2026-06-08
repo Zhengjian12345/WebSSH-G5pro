@@ -4624,32 +4624,38 @@ function signalClass(signal?: number): string {
 // 归一化 MAC：去分隔符 + 大写，兼容 ZTE 列表与 iwinfo 之间冒号/横线/大小写差异
 const normMac = (m: any) => String(m || '').toUpperCase().replace(/[^0-9A-F]/g, '');
 
-// 从 iwinfo assoclist 的 ubus batch 结果（id 100=ra0/2.4G、101=rai0/5G）里，
-// 按 MAC 建立 信号 + 下行协商速率(AP→终端) 索引
-function buildRfMap(resultMap: Record<number, any>): Record<string, { signal: number; txRate: number }> {
+// 从 /api/wifi/clients 返回的 hostapd 原始数据中，按 MAC 建立 信号 + 协商速率 索引
+// API 返回格式: { code: 0, data: { ra0: { clients: {MAC: {signal, tx_rate, rx_rate}} }, rai0: {...}, rai1: {...} } }
+function buildRfMapFromApiResponse(apiData: Record<string, any>): Record<string, { signal: number; txRate: number }> {
   const rfMap: Record<string, { signal: number; txRate: number }> = {};
-  for (const id of [100, 101]) {
-    const stations = resultMap[id]?.results;
-    if (!Array.isArray(stations)) continue;
-    for (const st of stations) {
-      const key = normMac(st?.mac);
+  for (const iface of ['ra0', 'rai0', 'rai1']) {
+    const clients = apiData[iface]?.clients;
+    if (!clients || typeof clients !== 'object') continue;
+    // hostapd 的 tx_rate / rx_rate 单位是 100kbps，需要转换为 Mbps
+    for (const [mac, st] of Object.entries(clients)) {
+      const key = normMac(mac);
       if (!key) continue;
+      const stAny = st as any;
       rfMap[key] = {
-        signal: st.signal,
-        txRate: st.tx?.rate ?? 0,  // AP 发给终端 = 终端下行
+        signal: stAny.signal,
+        txRate: (stAny.tx_rate ?? 0) / 10,  // 100kbps -> Mbps
       };
     }
   }
   return rfMap;
 }
 
-// 只拉两个频段的 iwinfo assoclist（弹窗每秒刷新用，比整张设备列表轻）
+// 通过 /api/wifi/clients 获取无线客户端信号和速率
 async function fetchWirelessRfMap(): Promise<Record<string, { signal: number; txRate: number }>> {
-  const resultMap = await callUbusBatch([
-    { jsonrpc: '2.0', id: 100, method: 'call', params: [SESSION_ID, 'iwinfo', 'assoclist', { device: 'ra0' }] },
-    { jsonrpc: '2.0', id: 101, method: 'call', params: [SESSION_ID, 'iwinfo', 'assoclist', { device: 'rai0' }] },
-  ]);
-  return buildRfMap(resultMap);
+  try {
+    const res = await axios.get('/api/wifi/clients?t=' + Date.now());
+    if (res.data?.code === 0 && res.data?.data) {
+      return buildRfMapFromApiResponse(res.data.data);
+    }
+  } catch (e) {
+    console.error('[fetchWirelessRfMap] API call failed:', e);
+  }
+  return {};
 }
 
 // 把信号/下行速率原地更新到现有无线设备（按 MAC 或 up_mac_address）；匹配不到则清空那两行
@@ -4719,16 +4725,20 @@ async function openDeviceDialog() {
       },
     ]);
 
-    // 通过 ubus batch 获取无线客户端信号和速率
-    const rfResultMap = await callUbusBatch([
-      { jsonrpc: '2.0', id: 100, method: 'call', params: [SESSION_ID, 'iwinfo', 'assoclist', { device: 'ra0' }] },
-      { jsonrpc: '2.0', id: 101, method: 'call', params: [SESSION_ID, 'iwinfo', 'assoclist', { device: 'rai0' }] },
-    ]);
-    const rfMap = buildRfMap(rfResultMap);
+    // 通过 /api/wifi/clients 获取无线客户端信号和速率
+    let rfMap: Record<string, { signal: number; txRate: number }> = {};
+    try {
+      const rfRes = await axios.get('/api/wifi/clients?t=' + Date.now());
+      if (rfRes.data?.code === 0 && rfRes.data?.data) {
+        rfMap = buildRfMapFromApiResponse(rfRes.data.data);
+      }
+    } catch (e) {
+      console.error('[openDeviceDialog] wifi/clients failed:', e);
+    }
 
     if (resultMap[98]?.wireless_access_list_info) {
       wirelessDeviceList.value = (resultMap[98].wireless_access_list_info as ConnectedDevice[]).map((d) => {
-        const rf = rfMap[normMac(d.mac_address)];
+        const rf = rfMap[normMac(d.mac_address)] || rfMap[normMac(d.up_mac_address)];
         return rf ? { ...d, signal: rf.signal, tx_rate: rf.txRate } : d;
       });
     }

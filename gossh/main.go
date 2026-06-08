@@ -903,7 +903,7 @@ func main() {
 		auth.GET("/api/wifi/settings", service.WifiUciGetHandler)
 		auth.POST("/api/wifi/settings", service.WifiSettingsSetHandler)
 		auth.POST("/api/net/ambr/get", service.NetAmbrGetHandler)
-		auth.GET("/api/wifi/clients", service.WifiClientsHandler)
+		auth.GET("/api/wifi/clients", service.WifiClientsGetHandler)
 		auth.GET("/api/speedtest", service.SpeedTestHandler)
 		auth.GET("/api/system/sms", service.SystemSmsListHandler)
 		auth.POST("/api/system/sms/forward", service.SystemSmsForwardHandler)

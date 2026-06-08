@@ -7,6 +7,7 @@ import (
 	// "net/http"
 	// "sort"
 	// "sync"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -155,6 +156,38 @@ func WifiStateSetHandler(c *gin.Context) {
 	c.JSON(200, gin.H{
 		"code":   0,
 		"result": result,
+	})
+}
+
+// WifiClientsGetHandler 获取所有无线频段的客户端信息（信号+速率）
+// 返回 hostapd.get_clients 原始数据，前端直接解析
+func WifiClientsGetHandler(c *gin.Context) {
+	ifaces := []string{"ra0", "rai0", "rai1"}
+	allClients := make(map[string]interface{})
+
+	for _, iface := range ifaces {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					// ubus 调用 panic，跳过该接口
+				}
+			}()
+			cmd := exec.Command("sh", "-c", fmt.Sprintf("ubus call hostapd.%s get_clients", iface))
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				return
+			}
+			var data map[string]interface{}
+			if err := json.Unmarshal(output, &data); err != nil {
+				return
+			}
+			allClients[iface] = data
+		}()
+	}
+
+	c.JSON(200, gin.H{
+		"code": 0,
+		"data": allClients,
 	})
 }
 

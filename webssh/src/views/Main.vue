@@ -4625,20 +4625,22 @@ function signalClass(signal?: number): string {
 const normMac = (m: any) => String(m || '').toUpperCase().replace(/[^0-9A-F]/g, '');
 
 // 从 /api/wifi/clients 返回的 hostapd 原始数据中，按 MAC 建立 信号 + 协商速率 索引
-// API 返回格式: { code: 0, data: { ra0: { clients: {MAC: {signal, tx_rate, rx_rate}} }, rai0: {...}, rai1: {...} } }
+// API 返回格式: { code: 0, data: { ra0: { clients: {MAC: {signal, rate: {tx, rx}}} }, rai0: {...}, rai1: {...} } }
+// 注意：2.4G (ra0) 的 rate 单位与 5G (rai0/rai1) 不同，需要分别换算
 function buildRfMapFromApiResponse(apiData: Record<string, any>): Record<string, { signal: number; txRate: number }> {
   const rfMap: Record<string, { signal: number; txRate: number }> = {};
   for (const iface of ['ra0', 'rai0', 'rai1']) {
     const clients = apiData[iface]?.clients;
     if (!clients || typeof clients !== 'object') continue;
-    // hostapd 的 tx_rate / rx_rate 单位是 100kbps，需要转换为 Mbps
+    // 2.4G (ra0): rate.tx / 10000 = Mbps；5G (rai0/rai1): rate.tx / 3125 = Mbps
+    const divisor = iface === 'ra0' ? 10000 : 3125;
     for (const [mac, st] of Object.entries(clients)) {
       const key = normMac(mac);
       if (!key) continue;
       const stAny = st as any;
       rfMap[key] = {
         signal: stAny.signal,
-        txRate: (stAny.tx_rate ?? 0) / 10,  // 100kbps -> Mbps
+        txRate: (stAny.rate?.tx ?? 0) / divisor,
       };
     }
   }

@@ -4620,38 +4620,47 @@ function signalClass(signal?: number): string {
 // 归一化 MAC：去分隔符 + 大写，兼容 ZTE 列表与 iwinfo 之间冒号/横线/大小写差异
 const normMac = (m: any) => String(m || '').toUpperCase().replace(/[^0-9A-F]/g, '');
 
-// 从 iwinfo assoclist 的批量结果（id 100=ra0/2.4G、101=rai0/5G）里，
-// 按 MAC 建立 信号 + 下行协商速率(AP→终端) 索引
-function buildRfMap(resultMap: Record<number, any>): Record<string, { signal: number; txRate: number }> {
+// 从 /api/wifi/clients 返回的数据中，按 MAC 建立 信号 + 下行协商速率 索引
+// API 返回格式: { code: 0, data: { ra0: { clients: {...} }, rai0: { clients: {...} }, rai1: { clients: {...} } } }
+// 注意：2.4G (ra0) 的 rate 单位与 5G (rai0/rai1) 不同，需要分别换算
+function buildRfMapFromApiResponse(apiData: Record<string, any>): Record<string, { signal: number; txRate: number }> {
   const rfMap: Record<string, { signal: number; txRate: number }> = {};
-  for (const id of [100, 101]) {
-    const stations = resultMap[id]?.results;
-    if (!Array.isArray(stations)) continue;
-    for (const st of stations) {
-      const key = normMac(st?.mac);
+  for (const iface of ['ra0', 'rai0', 'rai1']) {
+    const clients = apiData[iface]?.clients;
+    if (!clients || typeof clients !== 'object') continue;
+    // 2.4G (ra0): rate / 10000 = Mbps；5G (rai0/rai1): rate / 3125 = Mbps
+    const divisor = iface === 'ra0' ? 10000 : 3125;
+    for (const [mac, st] of Object.entries(clients)) {
+      const key = normMac(mac);
       if (!key) continue;
       rfMap[key] = {
-        signal: st.signal,
-        txRate: st.tx?.rate ?? 0,  // AP 发给终端 = 终端下行
+        signal: (st as any).signal,
+        txRate: ((st as any).rate?.tx ?? 0) / divisor,
       };
     }
   }
   return rfMap;
 }
 
-// 只拉两个频段的 iwinfo assoclist（弹窗每秒刷新用，比整张设备列表轻）
+// 通过专用 API 获取无线客户端信息（绕过 ubus batch，避免 hostapd 调用失败）
 async function fetchWirelessRfMap(): Promise<Record<string, { signal: number; txRate: number }>> {
-  const resultMap = await callUbusBatch([
-    { jsonrpc: '2.0', id: 100, method: 'call', params: [SESSION_ID, 'iwinfo', 'assoclist', { device: 'ra0' }] },
-    { jsonrpc: '2.0', id: 101, method: 'call', params: [SESSION_ID, 'iwinfo', 'assoclist', { device: 'rai0' }] },
-  ]);
-  return buildRfMap(resultMap);
+  try {
+    const res = await axios.get('/api/wifi/clients?t=' + Date.now());
+    if (res.data?.code === 0 && res.data?.data) {
+      return buildRfMapFromApiResponse(res.data.data);
+    }
+  } catch (e) {
+    console.error('[fetchWirelessRfMap] API call failed:', e);
+  }
+  return {};
 }
 
-// 把信号/下行速率原地更新到现有无线设备（按 MAC）；匹配不到则清空那两行
+// 把信号/下行速率原地更新到现有无线设备（按 MAC 或 up_mac_address）；匹配不到则清空那两行
+// MLO 设备可能使用不同的 MAC 地址（mac_address vs up_mac_address）
 function applyRfToWireless(rfMap: Record<string, { signal: number; txRate: number }>) {
   for (const d of wirelessDeviceList.value) {
-    const rf = rfMap[normMac(d.mac_address)];
+    // 尝试匹配 mac_address 或 up_mac_address（MLO 设备可能使用 up_mac_address）
+    const rf = rfMap[normMac(d.mac_address)] || rfMap[normMac(d.up_mac_address)];
     d.signal = rf ? rf.signal : undefined;
     d.tx_rate = rf ? rf.txRate : undefined;
   }
@@ -4711,27 +4720,16 @@ async function openDeviceDialog() {
           {},
         ],
       },
-      // iwinfo assoclist：G5Pro 上 ra0=2.4G、rai0=5G，
-      // 用来补充每个无线终端的信号值与协商速率（下面按 MAC 匹配）
-      {
-        jsonrpc: '2.0',
-        id: 100,
-        method: 'call',
-        params: [SESSION_ID, 'iwinfo', 'assoclist', { device: 'ra0' }],
-      },
-      {
-        jsonrpc: '2.0',
-        id: 101,
-        method: 'call',
-        params: [SESSION_ID, 'iwinfo', 'assoclist', { device: 'rai0' }],
-      },
     ]);
 
-    // 按 MAC 把首批 信号 + 下行协商速率 合并进无线设备列表
-    const rfMap = buildRfMap(resultMap);
+    // 通过专用 API 获取无线客户端信号和速率
+    const rfRes = await axios.get('/api/wifi/clients?t=' + Date.now());
+    const rfMap = rfRes.data?.code === 0 ? buildRfMapFromApiResponse(rfRes.data.data) : {};
+
     if (resultMap[98]?.wireless_access_list_info) {
       wirelessDeviceList.value = (resultMap[98].wireless_access_list_info as ConnectedDevice[]).map((d) => {
-        const rf = rfMap[normMac(d.mac_address)];
+        // 尝试匹配 mac_address 或 up_mac_address（MLO 设备可能使用 up_mac_address）
+        const rf = rfMap[normMac(d.mac_address)] || rfMap[normMac(d.up_mac_address)];
         return rf ? { ...d, signal: rf.signal, tx_rate: rf.txRate } : d;
       });
     }

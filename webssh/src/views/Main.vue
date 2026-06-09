@@ -1682,7 +1682,7 @@
       <div class="el-dialog__title" style="display:inline-flex;align-items:center;gap:6px;">
         已连接设备
         <el-tooltip
-          content="该速率为近似值，暂未发现可用速率获取接口。"
+          content="该速率为近似值，暂未发现可用速率获取接口，MLO 和有线设备暂时无法获取速率。"
           placement="top">
           <span class="settings-help-icon">!</span>
         </el-tooltip>
@@ -3536,7 +3536,7 @@ async function loadWifiSettings() {
     wifiForm.txpower = normalizeWifiTxPower(wifi0.txpowerpercent || wifi1.txpowerpercent || wifiForm.txpower || 100);
     wifiForm.country = wifi0.country || wifi1.country || wifiForm.country;
   } catch {
-    // U60Pro 外的开发环境可能没有 ubus，这里保持静默。
+    // G5 Pro 外的开发环境可能没有 ubus，这里保持静默。
   }
 }
 

@@ -162,7 +162,9 @@ func WifiStateSetHandler(c *gin.Context) {
 // WifiClientsGetHandler 获取所有无线频段的客户端信息（信号+速率）
 // G5Pro 上 iwinfo assoclist、iw dev station dump、iwpriv show stainfo 均不可用
 // 使用 ubus call hostapd.{iface} get_clients 获取信号和速率
-// 信号：准确（dBm）；速率：近似值（hostapd rate.tx 为 MediaTek 内部编码，除以 2600 近似换算）
+// 信号：准确（dBm）；速率：近似值（hostapd rate.tx 为 MediaTek 内部编码）
+//   - 2.4G (ra0): 除以 92307 近似换算为 Mbps
+//   - 5G (rai0/rai1): 除以 2600 近似换算为 Mbps
 // 返回格式与前端 buildRfMapFromApiResponse 兼容
 func WifiClientsGetHandler(c *gin.Context) {
 	ifaces := []string{"ra0", "rai0", "rai1"}
@@ -184,7 +186,7 @@ func WifiClientsGetHandler(c *gin.Context) {
 // parseHostapdClients 通过 ubus call hostapd.{iface} get_clients 获取客户端信息
 // hostapd 返回格式:
 //   {"freq":5180,"clients":{"AA:BB:CC:DD:EE:FF":{"signal":-56,"rate":{"rx":0,"tx":6232000},...}}}
-// signal 单位: dBm（准确）；rate.tx 单位: MediaTek 内部编码（需除以 2600 近似换算为 Mbps）
+// signal 单位: dBm（准确）；rate.tx 单位: MediaTek 内部编码
 func parseHostapdClients(iface string) map[string]interface{} {
 	clients := make(map[string]interface{})
 	cmd := exec.Command("sh", "-c", fmt.Sprintf("ubus call hostapd.%s get_clients 2>/dev/null", iface))
@@ -207,15 +209,21 @@ func parseHostapdClients(iface string) map[string]interface{} {
 		return clients
 	}
 
+	// 根据频段选择不同的换算因子
+	// 2.4G (ra0): 实测 rate.tx≈6000000 → 实际≈65Mbps → 因子≈92307
+	// 5G (rai0/rai1): 实测 rate.tx≈6232000 → 实际≈2402Mbps → 因子≈2600
+	divisor := 2600.0
+	if iface == "ra0" {
+		divisor = 92307.0
+	}
+
 	for mac, st := range data.Clients {
 		mac = strings.ToUpper(mac)
-		// MediaTek hostapd rate.tx 为内部编码，除以 2600 近似换算为 Mbps
-		// （实测: DESKTOP 5G rate.tx=6232000 → 6232000/2600≈2397≈2402Mbps）
 		clients[mac] = map[string]interface{}{
 			"signal": st.Signal,
 			"rate": map[string]interface{}{
-				"tx": st.Rate.Tx / 2600,
-				"rx": st.Rate.Rx / 2600,
+				"tx": st.Rate.Tx / divisor,
+				"rx": st.Rate.Rx / divisor,
 			},
 		}
 	}

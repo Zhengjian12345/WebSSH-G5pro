@@ -34,7 +34,7 @@
                       </template>
 
                       <p class="init-tip">
-                        U60Pro 版本只使用本地 SQLite，默认数据库文件为webssh.db，会保存在程序启动目录下。（通常需要先 cd 到目录，再运行程序）
+                        G5 Pro 版本只使用本地 SQLite，默认数据库文件为webssh.db，会保存在程序启动目录下。（通常需要先 cd 到目录，再运行程序）
                       </p>
                       <el-input v-model="form.sqlite_db_file" minlength="2" maxlength="255" show-word-limit clearable
                         placeholder="数据库文件名，例如 webssh.db">

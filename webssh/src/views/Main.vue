@@ -731,7 +731,11 @@
                   <div class="temp-chart">
                     <div class="temp-chart-head">
                       <span>温度趋势</span>
-                      <span v-if="cpuTempChart.max > 0" class="temp-chart-peak">峰值 {{ cpuTempChart.max.toFixed(1) }}°C</span>
+                      <span v-if="cpuTempChart.max > 0" class="temp-chart-peak">
+                        峰值 {{ cpuTempChart.max.toFixed(1) }}°C
+                        <span style="margin-left:8px;color:rgba(255,255,255,0.35);">均 {{ cpuTempChart.avg.toFixed(1) }}°C</span>
+                        <span style="margin-left:8px;color:rgba(255,255,255,0.35);">低 {{ cpuTempChart.min.toFixed(1) }}°C</span>
+                      </span>
                     </div>
                     <div class="temp-chart-plot">
                       <div class="temp-ylabels">
@@ -2358,7 +2362,9 @@ const cpuTempChart = computed(() => {
   }
   const area = n > 1 ? `0,${TEMP_CHART_H} ${points} ${TEMP_CHART_W},${TEMP_CHART_H}` : '';
   const max = data.reduce((m, p) => Math.max(m, p.v), 0);
-  return { points, area, max, niceMax, ygrid, xgrid, hasData: n > 1 };
+  const min = data.reduce((m, p) => Math.min(m, p.v), Infinity);
+  const avg = data.reduce((s, p) => s + p.v, 0) / n;
+  return { points, area, max, min: min === Infinity ? 0 : min, avg, niceMax, ygrid, xgrid, hasData: n > 1 };
 });
 
 // 坐标轴“漂亮”步进：把范围分成约 ticks 段，步进取 1/2/5×10^n

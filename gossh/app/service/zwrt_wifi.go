@@ -180,6 +180,13 @@ func WifiClientsGetHandler(c *gin.Context) {
 	c.JSON(200, gin.H{
 		"code": 0,
 		"data": allClients,
+		"debug": gin.H{
+			"divisors": gin.H{
+				"ra0":   92307.0,
+				"rai0":  2600.0,
+				"rai1":  2600.0,
+			},
+		},
 	})
 }
 
@@ -215,6 +222,8 @@ func parseHostapdClients(iface string) map[string]interface{} {
 	divisor := 2600.0
 	if iface == "ra0" {
 		divisor = 92307.0
+	} else if iface == "rai0" || iface == "rai1" {
+		divisor = 2600.0
 	}
 
 	for mac, st := range data.Clients {

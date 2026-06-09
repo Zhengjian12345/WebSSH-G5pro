@@ -1682,7 +1682,7 @@
       <div class="el-dialog__title" style="display:inline-flex;align-items:center;gap:6px;">
         已连接设备
         <el-tooltip
-          content="该速率仅供参考，MLO 连接的设备和有线连接设备无法显示速率。"
+          content="该速率为近似值，暂未发现可用速率获取接口。"
           placement="top">
           <span class="settings-help-icon">!</span>
         </el-tooltip>

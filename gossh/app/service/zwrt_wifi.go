@@ -160,15 +160,16 @@ func WifiStateSetHandler(c *gin.Context) {
 }
 
 // WifiClientsGetHandler 获取所有无线频段的客户端信息（信号+速率）
-// G5Pro 上 iwinfo assoclist 和 iw dev station dump 均不可用，
-// 使用 ubus call iwinfo assoclist 获取信号和速率（ubus API 可用）
+// G5Pro 上 iwinfo assoclist、iw dev station dump、iwpriv show stainfo 均不可用
+// 使用 ubus call hostapd.{iface} get_clients 获取信号和速率
+// 信号：准确（dBm）；速率：近似值（hostapd rate.tx 为 MediaTek 内部编码，除以 2600 近似换算）
 // 返回格式与前端 buildRfMapFromApiResponse 兼容
 func WifiClientsGetHandler(c *gin.Context) {
 	ifaces := []string{"ra0", "rai0", "rai1"}
 	allClients := make(map[string]interface{})
 
 	for _, iface := range ifaces {
-		clients := parseIwinfoUbusAssoclist(iface)
+		clients := parseHostapdClients(iface)
 		allClients[iface] = gin.H{
 			"clients": clients,
 		}
@@ -180,46 +181,41 @@ func WifiClientsGetHandler(c *gin.Context) {
 	})
 }
 
-// parseIwinfoUbusAssoclist 通过 ubus call iwinfo assoclist 获取客户端信息
-// ubus 输出格式:
-//   {"results":[{"mac":"AA:BB:CC:DD:EE:FF","signal":-68,"noise":-95,
-//     "rx":{"rate":72200,"mcs":7,"40mhz":false,"short_gi":false},
-//     "tx":{"rate":240200,"mcs":15,"40mhz":false,"short_gi":true}}]}
-// rate 单位是 100kbps（72200 = 72.2 Mbps）
-func parseIwinfoUbusAssoclist(iface string) map[string]interface{} {
+// parseHostapdClients 通过 ubus call hostapd.{iface} get_clients 获取客户端信息
+// hostapd 返回格式:
+//   {"freq":5180,"clients":{"AA:BB:CC:DD:EE:FF":{"signal":-56,"rate":{"rx":0,"tx":6232000},...}}}
+// signal 单位: dBm（准确）；rate.tx 单位: MediaTek 内部编码（需除以 2600 近似换算为 Mbps）
+func parseHostapdClients(iface string) map[string]interface{} {
 	clients := make(map[string]interface{})
-	cmd := exec.Command("sh", "-c", fmt.Sprintf("ubus call iwinfo assoclist '{\"device\":\"%s\"}' 2>/dev/null", iface))
+	cmd := exec.Command("sh", "-c", fmt.Sprintf("ubus call hostapd.%s get_clients 2>/dev/null", iface))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return clients
 	}
 
 	var data struct {
-		Results []struct {
-			Mac    string  `json:"mac"`
+		Clients map[string]struct {
 			Signal float64 `json:"signal"`
-			Noise  float64 `json:"noise"`
-			Rx     struct {
-				Rate float64 `json:"rate"`
-			} `json:"rx"`
-			Tx struct {
-				Rate float64 `json:"rate"`
-			} `json:"tx"`
-		} `json:"results"`
+			Rate   struct {
+				Rx float64 `json:"rx"`
+				Tx float64 `json:"tx"`
+			} `json:"rate"`
+		} `json:"clients"`
 	}
 
 	if err := json.Unmarshal(output, &data); err != nil {
 		return clients
 	}
 
-	for _, r := range data.Results {
-		mac := strings.ToUpper(r.Mac)
-		// iwinfo rate 单位是 100kbps，转换为 Mbps
+	for mac, st := range data.Clients {
+		mac = strings.ToUpper(mac)
+		// MediaTek hostapd rate.tx 为内部编码，除以 2600 近似换算为 Mbps
+		// （实测: DESKTOP 5G rate.tx=6232000 → 6232000/2600≈2397≈2402Mbps）
 		clients[mac] = map[string]interface{}{
-			"signal": r.Signal,
+			"signal": st.Signal,
 			"rate": map[string]interface{}{
-				"tx": r.Tx.Rate / 1000, // 100kbps -> Mbps
-				"rx": r.Rx.Rate / 1000,
+				"tx": st.Rate.Tx / 2600,
+				"rx": st.Rate.Rx / 2600,
 			},
 		}
 	}

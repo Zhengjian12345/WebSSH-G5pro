@@ -4607,9 +4607,9 @@ function getDeviceTagClass(interfaceType: string): string {
 }
 
 // 协商速率：iwinfo 的 rate 单位为 kbit/s，转成 Mbps 整数展示（单位在模板里统一加）
-function formatRate(kbit?: number): string {
-  if (!kbit || kbit <= 0) return '-';
-  return String(Math.round(kbit / 1000));
+function formatRate(mbps?: number): string {
+  if (!mbps || mbps <= 0) return '-';
+  return String(Math.round(mbps));
 }
 
 // 信号强度分级配色：数值越接近 0 越强

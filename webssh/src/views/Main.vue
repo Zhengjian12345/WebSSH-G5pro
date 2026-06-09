@@ -1470,6 +1470,29 @@
         </div>
       </section>
     </div>
+      <section class="settings-section">
+        <div class="wifi-tuning-grid">
+          <div class="wifi-tuning-item">
+            <div class="settings-title-row">
+              <span class="settings-section-title">温控策略</span>
+              <el-tooltip
+                content="关闭温控后设备将不再自动降频降温，可提升性能但可能导致过热。重启后自动恢复为开启状态。"
+                placement="top">
+                <span class="settings-help-icon">!</span>
+              </el-tooltip>
+            </div>
+            <el-switch
+              v-model="wifiForm.thermal_disabled"
+              active-text="关闭温控"
+              inactive-text="温控开启"
+              :loading="thermalLoading" />
+            <div class="settings-actions wifi-setting-actions">
+              <el-button size="small" type="primary" :loading="wifiSettingsSaving === 'thermal'" @click="applyThermalSetting">应用</el-button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
     <template #footer>
       <el-button @click="wifiSettingsDialogVisible = false">关闭</el-button>
     </template>
@@ -2144,7 +2167,7 @@ const wifiTxPowerOptions = [
 ];
 
 type NetworkApplyTarget = '' | 'mode' | 'lteBand' | 'nrBand' | 'lteCell' | 'nrCell';
-type WifiApplyTarget = '' | 'radio24' | 'radio5' | 'psm' | 'txpower' | 'country' | 'settings' | 'all';
+type WifiApplyTarget = '' | 'radio24' | 'radio5' | 'psm' | 'txpower' | 'country' | 'thermal' | 'settings' | 'all';
 
 interface DeviceSettings {
   wifi24_enabled?: boolean;
@@ -2162,6 +2185,7 @@ const networkSettingsDialogVisible = ref(false);
 const wifiSettingsDialogVisible = ref(false);
 const networkApplying = ref<NetworkApplyTarget>('');
 const wifiSettingsSaving = ref<WifiApplyTarget>('');
+const thermalLoading = ref(false);
 
 const networkForm = reactive({
   net_select: '',
@@ -2180,6 +2204,7 @@ const wifiForm = reactive({
   wifi5_enabled: false,
   txpower: 100,
   country: '',
+  thermal_disabled: false,
 });
 
 function normalizeWifiTxPower(value: unknown): number {
@@ -3331,6 +3356,7 @@ function openWifiSettingsDialog() {
   syncWifiFormFromCurrent();
   wifiSettingsDialogVisible.value = true;
   loadWifiSettings();
+  loadThermalPolicy();
 }
 
 function syncNetworkFormFromCurrent() {
@@ -3345,6 +3371,39 @@ function syncWifiFormFromCurrent() {
   wifiForm.high_performance = !!wifiInfo.value.highPerformance;
   wifiForm.wifi24_enabled = !!wifiInfo.value.wifiStatus24;
   wifiForm.wifi5_enabled = !!wifiInfo.value.wifiStatus5;
+}
+
+// ── 温控策略 ──
+async function loadThermalPolicy() {
+  thermalLoading.value = true;
+  try {
+    const resultMap = await callUbusBatch([
+      { jsonrpc: '2.0', id: 1, method: 'call', params: [SESSION_ID, 'zwrt_bsp.thermal', 'get_policy', {}] },
+    ]);
+    const policy = resultMap[1]?.policy;
+    // policy 为 "performance" 表示温控已关闭，其他值表示温控开启
+    wifiForm.thermal_disabled = (policy === 'performance');
+  } catch (e) {
+    console.error('[loadThermalPolicy] failed:', e);
+  } finally {
+    thermalLoading.value = false;
+  }
+}
+
+async function applyThermalSetting() {
+  wifiSettingsSaving.value = 'thermal';
+  try {
+    const policy = wifiForm.thermal_disabled ? 'performance' : 'normal';
+    await callUbusBatch([
+      { jsonrpc: '2.0', id: 1, method: 'call', params: [SESSION_ID, 'zwrt_bsp.thermal', 'set_policy', { policy }] },
+    ]);
+    ElMessage.success(wifiForm.thermal_disabled ? '已关闭温控（重启后自动恢复）' : '已开启温控');
+  } catch (e: any) {
+    console.error('[applyThermalSetting] failed:', e);
+    ElMessage.error(e.message || '温控设置失败');
+  } finally {
+    wifiSettingsSaving.value = '';
+  }
 }
 
 async function applyNetworkMode() {

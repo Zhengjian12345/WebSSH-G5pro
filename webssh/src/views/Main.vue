@@ -3392,9 +3392,9 @@ async function loadThermalPolicy() {
 async function applyThermalSetting() {
   wifiSettingsSaving.value = 'thermal';
   try {
-    const currentPolicy = wifiForm.thermal_disabled ? 0 : 1;
+    const action = wifiForm.thermal_disabled ? 0 : 1;
     const resultMap = await callUbusBatch([
-      { jsonrpc: '2.0', id: 1, method: 'call', params: [SESSION_ID, 'zwrt_bsp.thermal', 'set_policy', { current_policy: currentPolicy }] },
+      { jsonrpc: '2.0', id: 1, method: 'call', params: [SESSION_ID, 'zwrt_bsp.thermal', 'set_policy', { name: 19, action: action }] },
     ]);
     // 检查 ubus 是否返回了错误
     if (!resultMap[1]) {
@@ -3406,8 +3406,8 @@ async function applyThermalSetting() {
       { jsonrpc: '2.0', id: 1, method: 'call', params: [SESSION_ID, 'zwrt_bsp.thermal', 'get_policy', {}] },
     ]);
     const actual = confirmMap[1]?.current_policy;
-    if (actual !== currentPolicy) {
-      ElMessage.warning(`温控设置可能未生效（当前值: ${actual}，期望: ${currentPolicy}）`);
+    if (actual !== action) {
+      ElMessage.warning(`温控设置可能未生效（当前值: ${actual}，期望: ${action}）`);
     } else {
       ElMessage.success(wifiForm.thermal_disabled ? '已关闭温控（重启后自动恢复）' : '已开启温控');
     }

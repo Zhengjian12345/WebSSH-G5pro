@@ -3380,9 +3380,9 @@ async function loadThermalPolicy() {
     const resultMap = await callUbusBatch([
       { jsonrpc: '2.0', id: 1, method: 'call', params: [SESSION_ID, 'zwrt_bsp.thermal', 'get_policy', {}] },
     ]);
-    const policy = resultMap[1]?.policy;
-    // policy 为 "performance" 表示温控已关闭，其他值表示温控开启
-    wifiForm.thermal_disabled = (policy === 'performance');
+    const currentPolicy = resultMap[1]?.current_policy;
+    // current_policy: 1 = 温控开启（默认），0 = 温控关闭
+    wifiForm.thermal_disabled = (currentPolicy === 0);
   } catch (e) {
     console.error('[loadThermalPolicy] failed:', e);
   } finally {
@@ -3393,9 +3393,9 @@ async function loadThermalPolicy() {
 async function applyThermalSetting() {
   wifiSettingsSaving.value = 'thermal';
   try {
-    const policy = wifiForm.thermal_disabled ? 'performance' : 'normal';
+    const currentPolicy = wifiForm.thermal_disabled ? 0 : 1;
     await callUbusBatch([
-      { jsonrpc: '2.0', id: 1, method: 'call', params: [SESSION_ID, 'zwrt_bsp.thermal', 'set_policy', { policy }] },
+      { jsonrpc: '2.0', id: 1, method: 'call', params: [SESSION_ID, 'zwrt_bsp.thermal', 'set_policy', { current_policy: currentPolicy }] },
     ]);
     ElMessage.success(wifiForm.thermal_disabled ? '已关闭温控（重启后自动恢复）' : '已开启温控');
   } catch (e: any) {

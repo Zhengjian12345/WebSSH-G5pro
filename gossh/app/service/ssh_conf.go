@@ -63,6 +63,15 @@ func ConfUpdateById(c *gin.Context) {
 		c.JSON(200, gin.H{"code": 1, "msg": err.Error()})
 		return
 	}
+
+	// 如果密码为空，保留原密码（避免 BeforeUpdate 双重加密导致连接失败）
+	if config.Pwd == "" {
+		oldConf, err := config.FindByID(config.ID, c.GetUint("uid"))
+		if err == nil {
+			config.Pwd = oldConf.Pwd
+		}
+	}
+
 	err := config.UpdateById(config.ID, c.GetUint("uid"), &config)
 	if err != nil {
 		c.JSON(200, gin.H{"code": 2, "msg": err.Error()})

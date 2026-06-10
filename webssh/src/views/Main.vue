@@ -1469,7 +1469,6 @@
           </div>
         </div>
       </section>
-    </div>
       <section class="settings-section">
         <div class="wifi-tuning-grid">
           <div class="wifi-tuning-item">

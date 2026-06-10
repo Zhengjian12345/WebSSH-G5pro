@@ -1,0 +1,28 @@
+## 20260611_015154
+
+构建时间: 2026-06-11 01:51:54
+
+### 与上一版本（latest-data）相比
+
+- fix: 温控set_policy使用正确参数(name:19, action:0/1)替代错误的current_policy (96350ee) <GitHub Actions>
+- fix: 温控设置后读取确认是否生效，显示实际值便于调试 (638c40a) <GitHub Actions>
+- fix: 修复温控开关section标签位置错误导致构建失败 (fbc5d79) <GitHub Actions>
+- fix: 编辑连接时如果密码为空则保留原密码，避免BeforeUpdate双重加密导致连接失败 (b64381b) <GitHub Actions>
+- fix: 修复温控策略API字段名(current_policy)和值(0/1) (cd2f68c) <GitHub Actions>
+- feat: WiFi设置中添加温控策略开关(通过zwrt_bsp.thermal set_policy/get_policy) (d995ddf) <GitHub Actions>
+- feat: 温度趋势添加平均值和最低值显示 (31de859) <GitHub Actions>
+- debug: 添加divisor调试信息到API响应 (f5bf153) <GitHub Actions>
+- fix: 2.4G/5G使用不同速率换算因子，修改提示文案，U60Pro改为G5 Pro (e811099) <GitHub Actions>
+- fix: formatRate直接显示Mbps值不再除以1000，修复速率显示为2Mbps的问题 (359ec7f) <GitHub Actions>
+- fix: 使用hostapd get_clients获取信号(准确)+速率(近似值/2600)，修改提示文案 (8679c72) <GitHub Actions>
+- fix: 使用ubus call iwinfo assoclist获取信号和速率，rate单位100kbps转Mbps (ec3dff5) <GitHub Actions>
+- fix: 改用iw dev station dump获取速率(G5Pro上iwinfo assoclist不可用) (da5707b) <GitHub Actions>
+- fix: 使用iwinfo assoclist获取速率(MBit/s)和信号，替代hostapd的不准确rate字段 (eabf8d2) <GitHub Actions>
+- fix: hostapd rate.tx单位是Mbps，移除错误的除法换算 (224069c) <GitHub Actions>
+- fix: 修复hostapd数据解析，使用rate.tx字段并适配2.4G/5G不同单位 (6f83859) <GitHub Actions>
+- fix: 恢复0.03版本的WifiClientsGetHandler，使用hostapd.get_clients获取信号和速率 (eef6f6e) <GitHub Actions>
+- fix: 优化温度趋势图表横轴时间显示为相对时间(0s, 60s, 1m等) (1f13ec3) <GitHub Actions>
+- fix: 恢复ubus batch方式获取无线速率，适配G5Pro接口名ra0/rai0 (317af9b) <GitHub Actions>
+- fix: 修复wifi/clients API返回格式，匹配前端期望的按接口分组格式 (908e08c) <GitHub Actions>
+- fix: 恢复G5Pro格式AMBR/QCI解析，恢复/api/wifi/clients获取无线速率 (2d999c0) <GitHub Actions>
+- fix: G5Pro适配 - 修复key.log路径为/logfs/key.log，前端WiFi接口名改为ra0/rai0 (564c515) <GitHub Actions>

@@ -1469,28 +1469,6 @@
           </div>
         </div>
       </section>
-      <section class="settings-section">
-        <div class="wifi-tuning-grid">
-          <div class="wifi-tuning-item">
-            <div class="settings-title-row">
-              <span class="settings-section-title">温控策略</span>
-              <el-tooltip
-                content="关闭温控后设备将不再自动降频降温，可提升性能但可能导致过热。重启后自动恢复为开启状态。"
-                placement="top">
-                <span class="settings-help-icon">!</span>
-              </el-tooltip>
-            </div>
-            <el-switch
-              v-model="wifiForm.thermal_disabled"
-              active-text="关闭温控"
-              inactive-text="温控开启"
-              :loading="thermalLoading" />
-            <div class="settings-actions wifi-setting-actions">
-              <el-button size="small" type="primary" :loading="wifiSettingsSaving === 'thermal'" @click="applyThermalSetting">应用</el-button>
-            </div>
-          </div>
-        </div>
-      </section>
     </div>
     <template #footer>
       <el-button @click="wifiSettingsDialogVisible = false">关闭</el-button>

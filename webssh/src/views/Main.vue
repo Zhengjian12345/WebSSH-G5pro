@@ -1089,18 +1089,23 @@
   </div>
 
   <!-- ───────── 修复系统时间弹窗 ───────── -->
-  <el-dialog v-model="fixTimeDialogVisible" title="修复系统时间" width="480px" :close-on-click-modal="false">
-    <div style="font-size:13px;line-height:1.7;color:rgba(255,255,255,0.7);margin-bottom:12px;">
+  <el-dialog
+    v-model="fixTimeDialogVisible"
+    title="修复系统时间"
+    width="min(480px, 92vw)"
+    :close-on-click-modal="false"
+    class="wireless-dialog">
+    <div class="ft-desc">
       中兴固件常把系统时钟拨快 <b>8 小时</b>，导致底层 UTC 错乱、HTTPS 证书校验失败。
       点击下方按钮，从网络（明文 HTTP，不受时钟影响）取真实 UTC 并校正。
     </div>
-    <div style="font-size:12px;font-family:monospace;color:#7CFC00;margin:8px 0;white-space:pre-wrap;word-break:break-all;">{{ fixTimeDeviceInfo }}</div>
-    <pre v-if="fixTimeLog" style="background:#000;color:#9f9;border:1px solid #333;border-radius:6px;font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-all;min-height:80px;max-height:200px;overflow:auto;padding:8px;margin:8px 0;font-family:monospace;">{{ fixTimeLog }}</pre>
-    <div style="display:flex;gap:8px;margin-top:12px;">
+    <div class="ft-device-info">{{ fixTimeDeviceInfo }}</div>
+    <pre v-if="fixTimeLog" class="ft-log">{{ fixTimeLog }}</pre>
+    <div class="ft-actions">
       <el-button type="primary" :loading="fixTimeLoading" :disabled="fixTimeLoading" @click="doFixTime" style="flex:1;">立即校正时间</el-button>
       <el-button :loading="fixTimeRefreshLoading" @click="refreshDeviceTime" style="flex:1;">刷新当前时间</el-button>
     </div>
-    <div style="font-size:10px;color:#888;margin-top:10px;line-height:1.6;">
+    <div class="ft-note">
       注：同时做两件事 — ① 把底层 epoch 校正为真实 UTC（HTTPS/passwall 靠它）；
       ② 安装 Asia/Shanghai 时区文件并重启时间守护进程，让中兴页面显示恢复北京时间。
       系统时钟保持 UTC、显示走 UTC+8，互不冲突。设置已写入 /etc 持久化，重启仍生效。
@@ -7431,6 +7436,59 @@ onUnmounted(() => {
     background: rgba(15, 23, 42, 0.7);
     border-color: rgba(255, 255, 255, 0.1);
   }
+}
+
+/* ============== 修复系统时间弹窗样式 ============== */
+.ft-desc {
+  font-size: 13px;
+  line-height: 1.7;
+  color: rgba(255, 255, 255, 0.72);
+  margin-bottom: 14px;
+}
+.ft-desc b {
+  color: rgba(255, 255, 255, 0.92);
+}
+.ft-device-info {
+  font-size: 12px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  color: #7CFC00;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin: 0 0 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.6;
+}
+.ft-log {
+  background: rgba(0, 0, 0, 0.5);
+  color: #9f9;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+  min-height: 80px;
+  max-height: 200px;
+  overflow: auto;
+  padding: 10px 14px;
+  margin: 0 0 12px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+.ft-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+.ft-note {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.4);
+  margin-top: 12px;
+  line-height: 1.7;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 10px;
 }
 
 /* ============== Mihomo 弹窗 - 深色玻璃风格 ============== */

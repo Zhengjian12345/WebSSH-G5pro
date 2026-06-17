@@ -4130,7 +4130,7 @@ async function execLocalCmd(cmd: string, timeout = 60): Promise<{ code: number; 
 async function refreshDeviceTime() {
   fixTimeRefreshLoading.value = true
   try {
-    const r = await execLocalCmd("echo UTC=$(date -u '+%Y-%m-%d %H:%M:%S'); echo LOC=$(date '+%Y-%m-%d %H:%M:%S') '$(date +%Z); echo epoch=$(date -u +%s)", 10)
+    const r = await execLocalCmd("echo UTC=$(date -u '+%Y-%m-%d %H:%M:%S'); echo LOC=$(date '+%Y-%m-%d %H:%M:%S %Z'); echo epoch=$(date -u +%s)", 10)
     fixTimeDeviceInfo.value = r.data?.trim() || '未知'
   } catch (e: any) {
     fixTimeDeviceInfo.value = '读取失败: ' + (e.message || e)
@@ -4143,46 +4143,47 @@ async function doFixTime() {
   fixTimeLoading.value = true
   fixTimeLog.value = '正在从网络获取真实时间...'
   try {
-    const fixScript = `
-get_date() {
-    for u in http://www.baidu.com http://www.qq.com http://connectivitycheck.gstatic.com/generate_204 http://detectportal.firefox.com; do
-        d=$(curl -sI --connect-timeout 8 "$u" 2>/dev/null | tr -d '\\r' | grep -i '^date:' | head -1)
-        [ -z "$d" ] && d=$(wget -q -S -O /dev/null "$u" 2>&1 | tr -d '\\r' | grep -i 'date:' | head -1)
-        d=$(echo "$d" | sed 's/^[^:]*:[[:space:]]*//; s/[[:space:]]*GMT.*//')
-        [ -n "$d" ] && { echo "$d"; return 0; }
-    done
-    return 1
-}
-TZSTR='CST-8'
-TZB64='VFppZjIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAQAAHCAAABDU1QAVFppZjIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAQAAHCAAABDU1QACkNTVC04Cg=='
-BEFORE=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
-OLD=$(date -u +%s)
-NET=$(get_date) || { echo "ERROR: 无法从网络获取时间(检查联网)"; exit 1; }
-EPOCH=$(date -u -D "%a, %d %b %Y %H:%M:%S" -d "$NET" +%s 2>/dev/null)
-if [ -z "$EPOCH" ] || [ "$EPOCH" -lt 1700000000 ]; then echo "ERROR: 解析时间失败: $NET"; exit 1; fi
-date -u -s @"$EPOCH" >/dev/null 2>&1
-echo "$TZB64" | base64 -d > /etc/localtime.zoneinfo 2>/dev/null
-if [ -s /etc/localtime.zoneinfo ]; then
-    ln -sf /etc/localtime.zoneinfo /etc/localtime
-fi
-echo "$TZSTR" > /tmp/TZ 2>/dev/null
-if command -v uci >/dev/null 2>&1; then
-    uci set system.@system[0].zonename='Asia/Shanghai' 2>/dev/null
-    uci set system.@system[0].timezone="$TZSTR" 2>/dev/null
-    uci commit system 2>/dev/null
-fi
-[ -x /etc/init.d/zte_topsw_ntp ] && /etc/init.d/zte_topsw_ntp restart >/dev/null 2>&1
-[ -x /etc/init.d/zte_time_manager ] && /etc/init.d/zte_time_manager restart >/dev/null 2>&1
-[ -x /etc/init.d/zte_topsw_devui ] && /etc/init.d/zte_topsw_devui restart >/dev/null 2>&1
-AFTER=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
-AFTER_LOCAL=$(TZ="$TZSTR" date '+%Y-%m-%d %H:%M:%S')
-DIFF=$((OLD-EPOCH))
-echo "网络时间(UTC):   $NET"
-echo "校正后 UTC:     $AFTER"
-echo "校正后北京:    $AFTER_LOCAL CST"
-echo "时区已设为:    Asia/Shanghai (UTC+8)"
-echo "原偏差:        $DIFF 秒 (约 $((DIFF/3600)) 小时)"
-echo "DONE"`
+    const fixScript = [
+'get_date() {',
+'    for u in http://www.baidu.com http://www.qq.com http://connectivitycheck.gstatic.com/generate_204 http://detectportal.firefox.com; do',
+'        d=$(curl -sI --connect-timeout 8 "$u" 2>/dev/null | tr -d "\\r" | grep -i "^date:" | head -1)',
+'        [ -z "$d" ] && d=$(wget -q -S -O /dev/null "$u" 2>&1 | tr -d "\\r" | grep -i "date:" | head -1)',
+'        d=$(echo "$d" | sed "s/^[^:]*:[[:space:]]*//; s/[[:space:]]*GMT.*//")',
+'        [ -n "$d" ] && { echo "$d"; return 0; }',
+'    done',
+'    return 1',
+'}',
+'TZSTR="CST-8"',
+'TZB64="VFppZjIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAQAAHCAAABDU1QAVFppZjIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAQAAHCAAABDU1QACkNTVC04Cg=="',
+'BEFORE=$(date -u "+%Y-%m-%d %H:%M:%S UTC")',
+'OLD=$(date -u +%s)',
+'NET=$(get_date) || { echo "ERROR: 无法从网络获取时间(检查联网)"; exit 1; }',
+'EPOCH=$(date -u -D "%a, %d %b %Y %H:%M:%S" -d "$NET" +%s 2>/dev/null)',
+'if [ -z "$EPOCH" ] || [ "$EPOCH" -lt 1700000000 ]; then echo "ERROR: 解析时间失败: $NET"; exit 1; fi',
+'date -u -s @"$EPOCH" >/dev/null 2>&1',
+'echo "$TZB64" | base64 -d > /etc/localtime.zoneinfo 2>/dev/null',
+'if [ -s /etc/localtime.zoneinfo ]; then',
+'    ln -sf /etc/localtime.zoneinfo /etc/localtime',
+'fi',
+'echo "$TZSTR" > /tmp/TZ 2>/dev/null',
+'if command -v uci >/dev/null 2>&1; then',
+'    uci set system.@system[0].zonename="Asia/Shanghai" 2>/dev/null',
+'    uci set system.@system[0].timezone="$TZSTR" 2>/dev/null',
+'    uci commit system 2>/dev/null',
+'fi',
+'[ -x /etc/init.d/zte_topsw_ntp ] && /etc/init.d/zte_topsw_ntp restart >/dev/null 2>&1',
+'[ -x /etc/init.d/zte_time_manager ] && /etc/init.d/zte_time_manager restart >/dev/null 2>&1',
+'[ -x /etc/init.d/zte_topsw_devui ] && /etc/init.d/zte_topsw_devui restart >/dev/null 2>&1',
+'AFTER=$(date -u "+%Y-%m-%d %H:%M:%S UTC")',
+'AFTER_LOCAL=$(TZ="$TZSTR" date "+%Y-%m-%d %H:%M:%S")',
+'DIFF=$((OLD-EPOCH))',
+'echo "网络时间(UTC):   $NET"',
+'echo "校正后 UTC:     $AFTER"',
+'echo "校正后北京:    $AFTER_LOCAL CST"',
+'echo "时区已设为:    Asia/Shanghai (UTC+8)"',
+'echo "原偏差:        $DIFF 秒 (约 $((DIFF/3600)) 小时)"',
+'echo "DONE"',
+    ].join('\n')
     const r = await execLocalCmd(fixScript, 60)
     const output = (r.data || '').trim()
     if (r.code !== 0 || /ERROR:/.test(output) || !/DONE/.test(output)) {

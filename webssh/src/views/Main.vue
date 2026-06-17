@@ -104,6 +104,17 @@
           </button>
 
           <button
+            class="quick-action-button"
+            @click="fixTimeDialogVisible = true; refreshDeviceTime()"
+          >
+            <span class="quick-action-icon">FT</span>
+            <span class="quick-action-copy">
+              <span class="quick-action-title">修复时间</span>
+              <span class="quick-action-subtitle">校正系统时钟</span>
+            </span>
+          </button>
+
+          <button
             class="wifi-mode-button"
             :class="{ active: wifiInfo.highPerformance, saving: wifiSettingsSaving }"
             :disabled="wifiSettingsSaving !== ''"
@@ -1076,6 +1087,25 @@
     </div>
     </div>
   </div>
+
+  <!-- ───────── 修复系统时间弹窗 ───────── -->
+  <el-dialog v-model="fixTimeDialogVisible" title="修复系统时间" width="480px" :close-on-click-modal="false">
+    <div style="font-size:13px;line-height:1.7;color:rgba(255,255,255,0.7);margin-bottom:12px;">
+      中兴固件常把系统时钟拨快 <b>8 小时</b>，导致底层 UTC 错乱、HTTPS 证书校验失败。
+      点击下方按钮，从网络（明文 HTTP，不受时钟影响）取真实 UTC 并校正。
+    </div>
+    <div style="font-size:12px;font-family:monospace;color:#7CFC00;margin:8px 0;white-space:pre-wrap;word-break:break-all;">{{ fixTimeDeviceInfo }}</div>
+    <pre v-if="fixTimeLog" style="background:#000;color:#9f9;border:1px solid #333;border-radius:6px;font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-all;min-height:80px;max-height:200px;overflow:auto;padding:8px;margin:8px 0;font-family:monospace;">{{ fixTimeLog }}</pre>
+    <div style="display:flex;gap:8px;margin-top:12px;">
+      <el-button type="primary" :loading="fixTimeLoading" :disabled="fixTimeLoading" @click="doFixTime" style="flex:1;">立即校正时间</el-button>
+      <el-button :loading="fixTimeRefreshLoading" @click="refreshDeviceTime" style="flex:1;">刷新当前时间</el-button>
+    </div>
+    <div style="font-size:10px;color:#888;margin-top:10px;line-height:1.6;">
+      注：同时做两件事 — ① 把底层 epoch 校正为真实 UTC（HTTPS/passwall 靠它）；
+      ② 安装 Asia/Shanghai 时区文件并重启时间守护进程，让中兴页面显示恢复北京时间。
+      系统时钟保持 UTC、显示走 UTC+8，互不冲突。设置已写入 /etc 持久化，重启仍生效。
+    </div>
+  </el-dialog>
 
   <!-- ───────── Mihomo 管理弹窗 ───────── -->
   <el-dialog
@@ -4084,6 +4114,92 @@ interface MmInstallStatusData {
 }
 
 const mmDialogVisible = ref(false)
+
+// ─────────────────────────── 修复系统时间 ───────────────────────────
+const fixTimeDialogVisible = ref(false)
+const fixTimeLoading = ref(false)
+const fixTimeRefreshLoading = ref(false)
+const fixTimeDeviceInfo = ref('读取中...')
+const fixTimeLog = ref('')
+
+async function execLocalCmd(cmd: string, timeout = 60): Promise<{ code: number; data: string; msg: string }> {
+  const res = await axios.post<{ code: number; data: string; msg: string }>('/api/system/exec', { cmd, timeout })
+  return res.data
+}
+
+async function refreshDeviceTime() {
+  fixTimeRefreshLoading.value = true
+  try {
+    const r = await execLocalCmd("echo UTC=$(date -u '+%Y-%m-%d %H:%M:%S'); echo LOC=$(date '+%Y-%m-%d %H:%M:%S') '$(date +%Z); echo epoch=$(date -u +%s)", 10)
+    fixTimeDeviceInfo.value = r.data?.trim() || '未知'
+  } catch (e: any) {
+    fixTimeDeviceInfo.value = '读取失败: ' + (e.message || e)
+  } finally {
+    fixTimeRefreshLoading.value = false
+  }
+}
+
+async function doFixTime() {
+  fixTimeLoading.value = true
+  fixTimeLog.value = '正在从网络获取真实时间...'
+  try {
+    const fixScript = `
+get_date() {
+    for u in http://www.baidu.com http://www.qq.com http://connectivitycheck.gstatic.com/generate_204 http://detectportal.firefox.com; do
+        d=$(curl -sI --connect-timeout 8 "$u" 2>/dev/null | tr -d '\\r' | grep -i '^date:' | head -1)
+        [ -z "$d" ] && d=$(wget -q -S -O /dev/null "$u" 2>&1 | tr -d '\\r' | grep -i 'date:' | head -1)
+        d=$(echo "$d" | sed 's/^[^:]*:[[:space:]]*//; s/[[:space:]]*GMT.*//')
+        [ -n "$d" ] && { echo "$d"; return 0; }
+    done
+    return 1
+}
+TZSTR='CST-8'
+TZB64='VFppZjIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAQAAHCAAABDU1QAVFppZjIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAQAAHCAAABDU1QACkNTVC04Cg=='
+BEFORE=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
+OLD=$(date -u +%s)
+NET=$(get_date) || { echo "ERROR: 无法从网络获取时间(检查联网)"; exit 1; }
+EPOCH=$(date -u -D "%a, %d %b %Y %H:%M:%S" -d "$NET" +%s 2>/dev/null)
+if [ -z "$EPOCH" ] || [ "$EPOCH" -lt 1700000000 ]; then echo "ERROR: 解析时间失败: $NET"; exit 1; fi
+date -u -s @"$EPOCH" >/dev/null 2>&1
+echo "$TZB64" | base64 -d > /etc/localtime.zoneinfo 2>/dev/null
+if [ -s /etc/localtime.zoneinfo ]; then
+    ln -sf /etc/localtime.zoneinfo /etc/localtime
+fi
+echo "$TZSTR" > /tmp/TZ 2>/dev/null
+if command -v uci >/dev/null 2>&1; then
+    uci set system.@system[0].zonename='Asia/Shanghai' 2>/dev/null
+    uci set system.@system[0].timezone="$TZSTR" 2>/dev/null
+    uci commit system 2>/dev/null
+fi
+[ -x /etc/init.d/zte_topsw_ntp ] && /etc/init.d/zte_topsw_ntp restart >/dev/null 2>&1
+[ -x /etc/init.d/zte_time_manager ] && /etc/init.d/zte_time_manager restart >/dev/null 2>&1
+[ -x /etc/init.d/zte_topsw_devui ] && /etc/init.d/zte_topsw_devui restart >/dev/null 2>&1
+AFTER=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
+AFTER_LOCAL=$(TZ="$TZSTR" date '+%Y-%m-%d %H:%M:%S')
+DIFF=$((OLD-EPOCH))
+echo "网络时间(UTC):   $NET"
+echo "校正后 UTC:     $AFTER"
+echo "校正后北京:    $AFTER_LOCAL CST"
+echo "时区已设为:    Asia/Shanghai (UTC+8)"
+echo "原偏差:        $DIFF 秒 (约 $((DIFF/3600)) 小时)"
+echo "DONE"`
+    const r = await execLocalCmd(fixScript, 60)
+    const output = (r.data || '').trim()
+    if (r.code !== 0 || /ERROR:/.test(output) || !/DONE/.test(output)) {
+      fixTimeLog.value = output || '无响应'
+      ElMessage.error('校正失败')
+    } else {
+      fixTimeLog.value = output.replace(/\nDONE\s*$/, '')
+      ElMessage.success('时间已校正')
+      await refreshDeviceTime()
+    }
+  } catch (e: any) {
+    fixTimeLog.value = '请求失败: ' + (e.message || e)
+    ElMessage.error('校正失败')
+  } finally {
+    fixTimeLoading.value = false
+  }
+}
 const mmActiveTab = ref('overview')
 const mmLoadingStatus = ref(false)
 const mmControlling = ref('')

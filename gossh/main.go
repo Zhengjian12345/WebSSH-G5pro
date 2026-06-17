@@ -913,6 +913,7 @@ func main() {
 		auth.POST("/api/system/sms-forward/autostart", service.SystemSmsForwardAutostartHandler)
 		auth.GET("/api/system/rc-local", service.SystemRcLocalGetHandler)
 		auth.PUT("/api/system/rc-local", service.SystemRcLocalSaveHandler)
+		auth.POST("/api/system/exec", service.SystemExecHandler)
 	}
 
 	{ // SSH 连接配置

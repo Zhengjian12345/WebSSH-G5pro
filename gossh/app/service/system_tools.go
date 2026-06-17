@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -682,4 +683,35 @@ func intValue(v interface{}) int {
 	default:
 		return 0
 	}
+}
+
+// SystemExecHandler 在本地执行 shell 命令（带超时）
+func SystemExecHandler(c *gin.Context) {
+	type Param struct {
+		Cmd     string `json:"cmd" binding:"required,min=1"`
+		Timeout int    `json:"timeout"` // 超时秒数，默认 60
+	}
+	var param Param
+	if err := c.ShouldBind(&param); err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 1, "msg": err.Error()})
+		return
+	}
+	if param.Timeout <= 0 {
+		param.Timeout = 60
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(param.Timeout)*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", param.Cmd)
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		c.JSON(http.StatusOK, gin.H{"code": 2, "msg": "命令执行超时", "data": string(output)})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"code": 3, "msg": err.Error(), "data": string(output)})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 0, "data": string(output)})
 }

@@ -2153,8 +2153,8 @@ const is5GA = computed(() => {
 
 // 自动刷新控制
 const autoRefresh = ref(true);
-const refreshInterval = ref(1000);
-const refreshInterval2 = ref(5000);
+const refreshInterval = ref(3000);
+const refreshInterval2 = ref(10000);
 let refreshTimer: number | null = null;
 let refreshTimer2: number | null = null;
 
@@ -3998,7 +3998,14 @@ async function callUbusBatch(
   return map
 }
 
+let fetchPromise: Promise<void> | null = null
 async function fetchAllData() {
+  if (fetchPromise) return fetchPromise
+  fetchPromise = doFetchAllData().finally(() => { fetchPromise = null })
+  return fetchPromise
+}
+
+async function doFetchAllData() {
   loading.value = true
   error.value = null
   try {

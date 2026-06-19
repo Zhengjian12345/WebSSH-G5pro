@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
-	"crypto/sha512"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/binary"
@@ -413,13 +412,8 @@ func SetWindowSize(t pty.Pty, w, h uint32) {
 }
 
 func generateKey(seed string) ([]byte, error) {
-	var r io.Reader
-	if seed == "" {
-		r = rand.Reader
-	} else {
-		r = newDetermRand([]byte(seed))
-	}
-	privateKey, err := rsa.GenerateKey(r, 2048)
+	// 始终使用密码学安全随机数生成密钥，忽略 seed 参数
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, err
 	}
@@ -454,44 +448,6 @@ func fingerprint(k ssh.PublicKey) string {
 		b64 = strings.TrimSuffix(b64, "=") + "."
 	}
 	return "SHA256:" + b64
-}
-
-func newDetermRand(seed []byte) io.Reader {
-	const randSize = 2048
-	var out []byte
-	//strengthen seed
-	var next = seed
-	for i := 0; i < randSize; i++ {
-		next, out = hash(next)
-	}
-	return &determRand{
-		next: next,
-		out:  out,
-	}
-}
-
-type determRand struct {
-	next, out []byte
-}
-
-func (d *determRand) Read(b []byte) (int, error) {
-	l := len(b)
-	//HACK: combat https://golang.org/src/crypto/rsa/rsa.go#L257
-	if l == 1 {
-		return 1, nil
-	}
-	n := 0
-	for n < l {
-		next, out := hash(d.next)
-		n += copy(b[n:], out)
-		d.next = next
-	}
-	return n, nil
-}
-
-func hash(input []byte) (next []byte, output []byte) {
-	nextout := sha512.Sum512(input)
-	return nextout[:sha512.Size/2], nextout[sha512.Size/2:]
 }
 
 // ExecuteForChannel Execute a process for the channel.

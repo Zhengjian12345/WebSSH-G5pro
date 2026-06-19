@@ -218,14 +218,14 @@ func UserLogin(c *gin.Context) {
 	}
 	if err := c.ShouldBind(&param); err != nil {
 		audit.Name = utils.TruncateString(param.Name, 60)
-		audit.Pwd = utils.TruncateString(param.Pwd, 60)
+		audit.Pwd = "***"
 		_ = loginAudit.Create(&audit)
 		slog.Error("绑定数据错误", "err_msg", err.Error())
 		c.JSON(200, gin.H{"code": 1, "msg": "输入数据不合法"})
 		return
 	}
 	audit.Name = utils.TruncateString(param.Name, 60)
-	audit.Pwd = utils.TruncateString(param.Pwd, 60)
+	audit.Pwd = "***"
 
 	var user model.WebUser
 	u, err := user.FindByNameAndPwd(param.Name, param.Pwd)

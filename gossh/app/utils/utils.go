@@ -1,21 +1,25 @@
 package utils
 
 import (
-	"math/rand"
-	"time"
-	"unicode/utf8"
+	"crypto/rand"
+	"math/big"
 	"path/filepath"
 	"os"
+	"unicode/utf8"
 )
 
-// RandString 生成指定长度随机字符串
+// RandString 生成指定长度随机字符串（密码学安全）
 func RandString(length int) string {
-	str := "0123456789abcdefghijklmnopqrstuvwxyz"
-	data := []byte(str)
-	var result []byte
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	const charset = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	result := make([]byte, length)
 	for i := 0; i < length; i++ {
-		result = append(result, data[r.Intn(len(data))])
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
+		if err != nil {
+			// fallback: 不应发生，但防止 panic
+			result[i] = charset[i%len(charset)]
+			continue
+		}
+		result[i] = charset[n.Int64()]
 	}
 	return string(result)
 }

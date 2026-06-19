@@ -35,9 +35,9 @@ func (c *AppConfig) write() error {
 		return err
 	}
 
-	err = os.WriteFile(confFileFullPath, data, os.FileMode(0777))
+	err = os.WriteFile(confFileFullPath, data, os.FileMode(0600))
 	if err != nil {
-		slog.Error("写入默认配置文件错误:", "err_msg", err.Error())
+		slog.Error("写入默认配置文件错误:", "err_msg", err)
 		return err
 	}
 	return nil
@@ -158,7 +158,7 @@ func RewriteConfig(conf AppConfig) error {
 		slog.Error("删除旧配置文件错误:", "err_msg", err.Error())
 		return err
 	}
-	err = os.WriteFile(confFileFullPath, data, os.FileMode(0777))
+	err = os.WriteFile(confFileFullPath, data, os.FileMode(0600))
 	if err != nil {
 		slog.Error("写入默认配置文件错误:", "err_msg", err.Error())
 		return err

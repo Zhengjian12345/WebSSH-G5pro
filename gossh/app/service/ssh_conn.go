@@ -246,7 +246,17 @@ func NewSshConn(c *gin.Context) {
 		WriteBufferSize: 4096,
 		WriteBufferPool: wsWriteBufferPool,
 		CheckOrigin: func(r *http.Request) bool {
-			return true
+			// 允许同源和本地访问
+			origin := r.Header.Get("Origin")
+			if origin == "" {
+				return true
+			}
+			host := r.Host
+			if host == "" {
+				host = r.URL.Host
+			}
+			return origin == "http://"+host || origin == "https://"+host ||
+				origin == "http://"+host+"/" || origin == "https://"+host+"/"
 		},
 	}
 

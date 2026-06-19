@@ -46,6 +46,9 @@ func GenerateToken(id uint) (string, error) {
 func ParseToken(tokenString string) (*JwtClaims, error) {
 	claims := &JwtClaims{}
 	_, err := jwt.ParseWithClaims(tokenString, claims, func(t *jwt.Token) (any, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, errors.New("unexpected signing method")
+		}
 		return JwtSecret, nil
 	})
 	// 若token只是过期claims是有数据的，若token无法解析claims无数据

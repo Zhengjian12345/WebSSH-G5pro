@@ -63,7 +63,10 @@ axios.interceptors.request.use(
         req.url = `${req.url}`;
         // 在发送请求之前加token
         req.headers.Time = String(new Date().getTime());
-        req.headers.Authorization = localStorage.getItem("token");
+        const token = localStorage.getItem("token");
+        if (token) {
+            req.headers.Authorization = token;
+        }
         return req;
     },
     (err) => {

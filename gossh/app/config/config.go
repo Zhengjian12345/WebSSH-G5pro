@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path"
+	"sync"
 	"time"
 )
 
@@ -59,6 +60,23 @@ var DefaultConfig = AppConfig{
 	Port:          "8899",
 	CertFile:      path.Join(WorkDir, "cert.pem"),
 	KeyFile:       path.Join(WorkDir, "key.key"),
+}
+
+// ConfigMu 保护 DefaultConfig 的并发读写
+var ConfigMu sync.RWMutex
+
+// GetConfig 线程安全地读取配置
+func GetConfig() AppConfig {
+	ConfigMu.RLock()
+	defer ConfigMu.RUnlock()
+	return DefaultConfig
+}
+
+// SetConfig 线程安全地写入配置
+func SetConfig(c AppConfig) {
+	ConfigMu.Lock()
+	defer ConfigMu.Unlock()
+	DefaultConfig = c
 }
 
 // var UserHomeDir, _ = os.UserHomeDir()

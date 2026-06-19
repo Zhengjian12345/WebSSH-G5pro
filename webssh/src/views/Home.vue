@@ -2715,6 +2715,9 @@ function debounce(fn: Function, delay: number) {
   }
 }
 
+// 保存 debounced 引用以便移除
+const debouncedResize = debounce(windowResize, 200);
+
 /**
  * 节流
  * @param fn 
@@ -2735,13 +2738,15 @@ function throttle(fn: Function, delay: number) {
  * 断开所有会话
  */
 function disconnectAllSession() {
-  // 清理连接资源
-  data.host_tabs.forEach((host, index) => {
+  data.host_tabs.forEach((host) => {
     try {
-      axios.post(`/api/ssh/disconnect?session_id=${host.session_id}`);
-    } catch (error) {
-      console.log(error);
-    }
+      if (host.ws && host.ws.readyState !== WebSocket.CLOSED) {
+        host.ws.close();
+      }
+      if (host.term) host.term.dispose();
+      if (host.fit) host.fit.dispose();
+    } catch (e) { console.error(e); }
+    axios.post(`/api/ssh/disconnect?session_id=${host.session_id}`).catch(() => {});
   });
 }
 
@@ -2821,12 +2826,12 @@ onMounted(() => {
   reportConnectStatus();
   getAllHost();
   getAllCmdNote();
-  window.addEventListener("resize", debounce(windowResize, 200));
+  window.addEventListener("resize", debouncedResize);
   window.addEventListener("resize", updateWindowWidth);
   windowResize();
-  window.onbeforeunload = function () {
+  window.addEventListener("beforeunload", function () {
     return "关闭吗";
-  };
+  });
 });
 
 
@@ -2838,6 +2843,7 @@ onBeforeUnmount(() => {
   stopCompressProgress();
   stopUpdateStatusPolling();
   disconnectAllSession();
+  window.removeEventListener("resize", debouncedResize);
   window.removeEventListener("resize", updateWindowWidth);
   window.onbeforeunload = null;
 })

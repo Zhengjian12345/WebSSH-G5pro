@@ -32,6 +32,8 @@ import (
 type Server struct {
 	cli    *model.SshdConf
 	config *ssh.ServerConfig
+	listen  net.Listener
+	stopCh chan struct{}
 }
 
 func NewServer(c *model.SshdConf) (*Server, error) {
@@ -49,14 +51,36 @@ func (s *Server) Start() error {
 	if err != nil {
 		return fmt.Errorf("failed to listen on %s:%d: %w", s.cli.Host, s.cli.Port, err)
 	}
+	s.listen = listen
+	s.stopCh = make(chan struct{})
 	slog.Info("Listening on", "host", s.cli.Host, "port", s.cli.Port)
 	for {
+		select {
+		case <-s.stopCh:
+			slog.Info("SSHD server stopped")
+			return nil
+		default:
+		}
 		tcpConn, err := listen.Accept()
 		if err != nil {
-			slog.Error("Failed to accept incoming connection", "err", err)
-			continue
+			select {
+			case <-s.stopCh:
+				return nil
+			default:
+				slog.Error("Failed to accept incoming connection", "err", err)
+				continue
+			}
 		}
 		go s.handleConn(tcpConn)
+	}
+}
+
+func (s *Server) Stop() {
+	if s.stopCh != nil {
+		close(s.stopCh)
+	}
+	if s.listen != nil {
+		s.listen.Close()
 	}
 }
 

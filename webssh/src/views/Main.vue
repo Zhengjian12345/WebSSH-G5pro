@@ -115,6 +115,18 @@
           </button>
 
           <button
+            class="quick-action-button"
+            :class="{ active: tsStatus.running }"
+            @click="openTsDialog"
+          >
+            <span class="quick-action-icon">TS</span>
+            <span class="quick-action-copy">
+              <span class="quick-action-title">Tailscale</span>
+              <span class="quick-action-subtitle">{{ tsStatus.running ? 'VPN 运行中' : 'VPN 已停止' }}</span>
+            </span>
+          </button>
+
+          <button
             class="wifi-mode-button"
             :class="{ active: wifiInfo.highPerformance, saving: wifiSettingsSaving }"
             :disabled="wifiSettingsSaving !== ''"
@@ -1109,6 +1121,78 @@
       注：同时做两件事 — ① 把底层 epoch 校正为真实 UTC（HTTPS/passwall 靠它）；
       ② 安装 Asia/Shanghai 时区文件并重启时间守护进程，让中兴页面显示恢复北京时间。
       系统时钟保持 UTC、显示走 UTC+8，互不冲突。设置已写入 /etc 持久化，重启仍生效。
+    </div>
+  </el-dialog>
+
+  <!-- ───────── Tailscale 管理弹窗 ───────── -->
+  <el-dialog
+    v-model="tsDialogVisible"
+    title="Tailscale VPN"
+    width="min(560px, 94vw)"
+    :close-on-click-modal="true"
+    destroy-on-close
+    class="wireless-dialog">
+    <div class="ts-status-grid">
+      <div class="ts-stat">
+        <label>安装状态</label>
+        <span :class="tsStatus.installed ? 'ts-ok' : 'ts-muted'">{{ tsStatus.installed ? '已安装' : '未安装' }}</span>
+      </div>
+      <div class="ts-stat">
+        <label>运行状态</label>
+        <span :class="tsStatus.running ? 'ts-ok' : 'ts-warn'">{{ tsStatus.running ? '运行中' : '已停止' }}</span>
+      </div>
+      <div class="ts-stat">
+        <label>Tailscale IP</label>
+        <span class="ts-code">{{ tsStatus.tsIP || '-' }}</span>
+      </div>
+      <div class="ts-stat">
+        <label>主机名</label>
+        <span class="ts-code">{{ tsStatus.hostname || '-' }}</span>
+      </div>
+      <div class="ts-stat">
+        <label>版本</label>
+        <span>{{ tsStatus.version || '-' }}</span>
+      </div>
+    </div>
+    <div v-if="tsStatus.loginUrl" class="ts-card">
+      <div class="ts-title"><strong>登录授权</strong></div>
+      <div class="ts-row">
+        <label>登录链接</label>
+        <el-input v-model="tsStatus.loginUrl" readonly size="small" />
+      </div>
+      <div class="ts-actions">
+        <el-button size="small" type="primary" @click="copyTsLoginUrl">复制链接</el-button>
+        <el-button size="small" @click="tsStatus.loginUrl = ''">关闭</el-button>
+      </div>
+    </div>
+    <div class="ts-card">
+      <div class="ts-title"><strong>子网路由</strong></div>
+      <div class="ts-row">
+        <label>宣告路由</label>
+        <el-switch v-model="tsForm.advertiseRoutes" active-text="开启" inactive-text="关闭" />
+      </div>
+      <div class="ts-row">
+        <label>接受路由</label>
+        <el-switch v-model="tsForm.acceptRoutes" active-text="开启" inactive-text="关闭" />
+      </div>
+      <div class="ts-row">
+        <label>SNAT</label>
+        <el-switch v-model="tsForm.snat" active-text="开启" inactive-text="关闭" />
+      </div>
+    </div>
+    <div class="ts-actions">
+      <el-button v-if="!tsStatus.installed" type="primary" :loading="tsInstalling" @click="installTailscale" style="flex:1;">安装 Tailscale</el-button>
+      <el-button v-if="tsStatus.installed && !tsStatus.running" type="success" :loading="tsLoading" @click="startTailscale" style="flex:1;">启动</el-button>
+      <el-button v-if="tsStatus.installed && tsStatus.running" type="danger" :loading="tsLoading" @click="stopTailscale" style="flex:1;">停止</el-button>
+      <el-button v-if="tsStatus.installed && tsStatus.running" type="primary" :loading="tsLoading" @click="loginTailscale" style="flex:1;">登录</el-button>
+      <el-button v-if="tsStatus.installed && tsStatus.running" :loading="tsLoading" @click="logoutTailscale" style="flex:1;">登出</el-button>
+      <el-button v-if="tsStatus.installed" :loading="tsLoading" @click="uninstallTailscale" style="flex:1;">卸载</el-button>
+      <el-button :loading="tsRefreshing" @click="refreshTsStatus" style="flex:1;">刷新</el-button>
+    </div>
+    <pre v-if="tsLog" class="ts-log">{{ tsLog }}</pre>
+    <div class="ft-note">
+      注：Tailscale 创建安全的 WireGuard mesh VPN。开启子网路由后，其他 Tailscale 节点可通过此设备访问 LAN。
+      登录后请访问 https://login.tailscale.com/admin/machines 管理节点和 ACL。
     </div>
   </el-dialog>
 
@@ -4213,6 +4297,190 @@ async function doFixTime() {
     fixTimeLoading.value = false
   }
 }
+// ─────────────────────────── Tailscale ───────────────────────────
+const tsDialogVisible = ref(false)
+const tsLoading = ref(false)
+const tsRefreshing = ref(false)
+const tsInstalling = ref(false)
+const tsLog = ref('')
+
+interface TsStatus {
+  installed: boolean
+  running: boolean
+  version: string
+  tsIP: string
+  hostname: string
+  loginUrl: string
+}
+const tsStatus = reactive<TsStatus>({
+  installed: false, running: false, version: '', tsIP: '', hostname: '', loginUrl: ''
+})
+const tsForm = reactive({
+  advertiseRoutes: true,
+  acceptRoutes: false,
+  snat: true,
+})
+
+function openTsDialog() {
+  tsDialogVisible.value = true
+  refreshTsStatus()
+}
+
+async function refreshTsStatus() {
+  tsRefreshing.value = true
+  try {
+    const r = await execLocalCmd('[ -x /data/plugins/tailscale/bin/tailscale ] && echo installed || echo not_installed', 5)
+    tsStatus.installed = /installed/.test(r.data || '')
+    if (!tsStatus.installed) {
+      tsStatus.running = false
+      tsStatus.version = ''
+      tsStatus.tsIP = ''
+      tsStatus.hostname = ''
+      return
+    }
+    const ver = await execLocalCmd('/data/plugins/tailscale/bin/tailscale version 2>/dev/null | head -n 1', 5)
+    tsStatus.version = (ver.data || '').trim()
+    const status = await execLocalCmd('/data/plugins/tailscale/bin/tailscale --socket=/tmp/tailscale-ufi.sock status --json 2>/dev/null || echo "{}"', 8)
+    let st: any = {}
+    try { st = JSON.parse(status.data || '{}') } catch { st = {} }
+    tsStatus.running = !!st?.Self?.PublicKey
+    tsStatus.tsIP = st?.Self?.TailscaleIPs?.[0] || ''
+    tsStatus.hostname = st?.Self?.HostName || ''
+  } catch (e: any) {
+    ElMessage.error('获取状态失败: ' + (e.message || e))
+  } finally {
+    tsRefreshing.value = false
+  }
+}
+
+async function installTailscale() {
+  tsInstalling.value = true
+  tsLog.value = '开始安装 Tailscale...'
+  try {
+    const script = [
+      'DIR="/data/plugins/tailscale"',
+      'BIN_DIR="$DIR/bin"',
+      'mkdir -p "$DIR" "$BIN_DIR"',
+      'echo "下载 Tailscale..."',
+      'curl -fsSL --connect-timeout 15 "https://pkgs.tailscale.com/stable/tailscale_latest_arm64.tgz" -o /tmp/tailscale.tgz 2>&1 || { echo "下载失败"; exit 1; }',
+      'echo "解压..."',
+      'tar -xzf /tmp/tailscale.tgz -C /tmp/ 2>&1',
+      'cp /tmp/tailscale_*/tailscale "$BIN_DIR/" 2>&1',
+      'cp /tmp/tailscale_*/tailscaled "$BIN_DIR/" 2>&1',
+      'chmod +x "$BIN_DIR/tailscale" "$BIN_DIR/tailscaled"',
+      '"$BIN_DIR/tailscale" version 2>/dev/null | head -n 1',
+      'rm -rf /tmp/tailscale.tgz /tmp/tailscale_*',
+      'echo "安装完成"',
+    ].join('\n')
+    const r = await execLocalCmd(script, 120)
+    tsLog.value = (r.data || '').trim()
+    if (r.code === 0 && /安装完成/.test(tsLog.value)) {
+      ElMessage.success('Tailscale 安装成功')
+      await refreshTsStatus()
+    } else {
+      ElMessage.error('安装失败')
+    }
+  } catch (e: any) {
+    tsLog.value = '安装异常: ' + (e.message || e)
+    ElMessage.error('安装失败')
+  } finally {
+    tsInstalling.value = false
+  }
+}
+
+async function startTailscale() {
+  tsLoading.value = true
+  try {
+    const r = await execLocalCmd('nohup /data/plugins/tailscale/bin/tailscaled --socket=/tmp/tailscale-ufi.sock --state=/data/plugins/tailscale/tailscaled.state --tun=tailscale0 >/dev/null 2>&1 & sleep 2 && echo started', 10)
+    if (/started/.test(r.data || '')) {
+      ElMessage.success('已启动')
+      await refreshTsStatus()
+    } else {
+      ElMessage.error('启动失败')
+    }
+  } catch (e: any) {
+    ElMessage.error('启动失败: ' + (e.message || e))
+  } finally {
+    tsLoading.value = false
+  }
+}
+
+async function stopTailscale() {
+  tsLoading.value = true
+  try {
+    await execLocalCmd('killall tailscaled 2>/dev/null; echo stopped', 5)
+    ElMessage.success('已停止')
+    tsStatus.running = false
+    tsStatus.tsIP = ''
+  } catch (e: any) {
+    ElMessage.error('停止失败: ' + (e.message || e))
+  } finally {
+    tsLoading.value = false
+  }
+}
+
+async function loginTailscale() {
+  tsLoading.value = true
+  tsLog.value = '正在获取登录链接...'
+  try {
+    const hostname = 'ufi-' + (Math.random().toString(36).substring(2, 8))
+    const r = await execLocalCmd('/data/plugins/tailscale/bin/tailscale --socket=/tmp/tailscale-ufi.sock up --hostname=' + hostname + ' --advertise-routes=192.168.98.0/24 --accept-routes=false --ssh=false 2>&1 & sleep 5 && grep -oE "https://login\\.tailscale\\.com/[^[:space:]]+" /tmp/tailscale-login.log 2>/dev/null || echo "请手动执行 tailscale up"', 15)
+    const out = (r.data || '').trim()
+    const url = out.match(/https:\/\/login\.tailscale\.com\/[^\s]+/)?.[0]
+    if (url) {
+      tsStatus.loginUrl = url
+      tsLog.value = '登录链接已生成，请复制到浏览器打开授权'
+      ElMessage.success('登录链接已生成')
+    } else {
+      tsLog.value = out
+      ElMessage.info('请手动执行 tailscale up 进行登录')
+    }
+    await refreshTsStatus()
+  } catch (e: any) {
+    tsLog.value = '登录异常: ' + (e.message || e)
+    ElMessage.error('登录失败')
+  } finally {
+    tsLoading.value = false
+  }
+}
+
+async function logoutTailscale() {
+  tsLoading.value = true
+  try {
+    await execLocalCmd('/data/plugins/tailscale/bin/tailscale --socket=/tmp/tailscale-ufi.sock logout 2>&1', 10)
+    tsStatus.loginUrl = ''
+    ElMessage.success('已登出')
+    await refreshTsStatus()
+  } catch (e: any) {
+    ElMessage.error('登出失败: ' + (e.message || e))
+  } finally {
+    tsLoading.value = false
+  }
+}
+
+async function uninstallTailscale() {
+  tsLoading.value = true
+  try {
+    await execLocalCmd('killall tailscaled 2>/dev/null; rm -rf /data/plugins/tailscale; echo removed', 10)
+    tsStatus.installed = false
+    tsStatus.running = false
+    tsStatus.version = ''
+    tsStatus.tsIP = ''
+    tsStatus.hostname = ''
+    tsStatus.loginUrl = ''
+    ElMessage.success('已卸载')
+  } catch (e: any) {
+    ElMessage.error('卸载失败: ' + (e.message || e))
+  } finally {
+    tsLoading.value = false
+  }
+}
+
+function copyTsLoginUrl() {
+  if (!tsStatus.loginUrl) return
+  navigator.clipboard.writeText(tsStatus.loginUrl).then(() => ElMessage.success('已复制')).catch(() => ElMessage.error('复制失败'))
+}
+
 const mmActiveTab = ref('overview')
 const mmLoadingStatus = ref(false)
 const mmControlling = ref('')
@@ -7496,6 +7764,94 @@ onUnmounted(() => {
   line-height: 1.7;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   padding-top: 10px;
+}
+
+/* ============== Tailscale 弹窗样式 ============== */
+.ts-status-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 0 0 12px;
+}
+.ts-stat {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.2);
+  min-height: 52px;
+}
+.ts-stat label {
+  display: block;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 11px;
+  margin-bottom: 3px;
+}
+.ts-stat span {
+  display: block;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.ts-ok { color: #67c23a; }
+.ts-warn { color: #e6a23c; }
+.ts-muted { color: rgba(255, 255, 255, 0.4); }
+.ts-code {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 11px;
+}
+.ts-card {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 10px;
+  margin: 10px 0;
+}
+.ts-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+.ts-title strong {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.9);
+}
+.ts-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 6px 0;
+}
+.ts-row > label {
+  min-width: 90px;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 12px;
+}
+.ts-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.ts-log {
+  display: block;
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  padding: 10px 12px;
+  margin-top: 10px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #9f9;
+}
+@media (max-width: 480px) {
+  .ts-status-grid { grid-template-columns: repeat(2, 1fr); }
 }
 
 /* ============== Mihomo 弹窗 - 深色玻璃风格 ============== */

@@ -1749,6 +1749,15 @@
             </div>
           </div>
         </div>
+        <div class="mh-sub-section" style="margin-bottom:12px">
+          <div class="settings-section-title">开机自启</div>
+          <div class="mh-info-grid">
+            <div class="mh-info-item">
+              <span class="mh-info-label">自启动 tailscaled</span>
+              <el-switch v-model="tsAutoStart" :loading="tsAutoStartChanging" @change="toggleTsAutoStart" active-text="开" inactive-text="关" />
+            </div>
+          </div>
+        </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <el-button v-if="!tsStatus.installed" type="primary" :loading="tsInstalling" @click="installTailscale" style="flex:1;">安装</el-button>
           <el-button v-if="tsStatus.installed && !tsStatus.running" type="success" :loading="tsLoading" @click="startTailscale" style="flex:1;">启动</el-button>
@@ -4324,6 +4333,60 @@ const tsForm = reactive({
   acceptRoutes: false,
   snat: true,
 })
+const tsAutoStart = ref(false)
+const tsAutoStartChanging = ref(false)
+const TS_AUTOSTART_MARKER = '# [WebSSH] Tailscale autostart'
+
+async function checkTsAutoStart() {
+  const r = await execLocalCmd(`grep -qF "${TS_AUTOSTART_MARKER}" /etc/rc.local 2>/dev/null && echo on || echo off`, 5)
+  tsAutoStart.value = /on/.test(r.data || '')
+}
+
+async function toggleTsAutoStart(val: boolean) {
+  tsAutoStartChanging.value = true
+  try {
+    const DIR = '/data/plugins/tailscale'
+    const marker = TS_AUTOSTART_MARKER
+    if (val) {
+      // 添加自启动：先移除旧的，再追加新的
+      const script = [
+        `sed -i '/${marker}/,+3d' /etc/rc.local 2>/dev/null`,
+        `cat >> /etc/rc.local << 'EOF'`,
+        `${marker}`,
+        `if [ -x ${DIR}/bin/tailscaled ]; then`,
+        `  ${DIR}/bin/tailscaled --socket=/tmp/tailscale-ufi.sock --state=${DIR}/tailscaled.state --tun=tailscale0 >/dev/null 2>&1 &`,
+        `  echo $! > ${DIR}/tailscaled.pid`,
+        `fi`,
+        `EOF`,
+        'echo done',
+      ].join('\n')
+      const r = await execLocalCmd(script, 5)
+      if (!/done/.test(r.data || '')) {
+        tsAutoStart.value = false
+        ElMessage.error('设置失败')
+      } else {
+        ElMessage.success('已开启自启动')
+      }
+    } else {
+      const script = [
+        `sed -i '/${marker}/,+5d' /etc/rc.local 2>/dev/null`,
+        'echo done',
+      ].join('\n')
+      const r = await execLocalCmd(script, 5)
+      if (!/done/.test(r.data || '')) {
+        tsAutoStart.value = true
+        ElMessage.error('设置失败')
+      } else {
+        ElMessage.success('已关闭自启动')
+      }
+    }
+  } catch (e: any) {
+    tsAutoStart.value = !val
+    ElMessage.error('操作失败: ' + (e.message || e))
+  } finally {
+    tsAutoStartChanging.value = false
+  }
+}
 
 async function refreshTsStatus() {
   tsRefreshing.value = true
@@ -4374,6 +4437,7 @@ async function refreshTsStatus() {
       tsStatus.loginUrl = ''
     }
     // 如果进程存活但状态获取失败，可能是还在初始化中，保留之前的 IP/hostname
+    await checkTsAutoStart()
   } catch (e: any) {
     ElMessage.error('获取状态失败: ' + (e.message || e))
   } finally {

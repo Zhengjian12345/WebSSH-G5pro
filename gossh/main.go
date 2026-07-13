@@ -842,6 +842,7 @@ func initApplication() {
 	service.InitSessionClean()
 	service.InitSshServer()
 	service.InitMihomoAutostart()
+	service.InitTailscaleAutostart()
 	service.InitSmsForwardAutostart()
 	service.InitWifiSettingsAutostart()
 	fmt.Printf("WebBaseDir:[%s]\n", config.DefaultConfig.WebBaseDir)
@@ -1040,6 +1041,9 @@ func main() {
 		// 开机自启
 		auth.GET("/api/mihomo/autostart", service.MihomoGetAutostartHandler)
 		auth.POST("/api/mihomo/autostart", service.MihomoSetAutostartHandler)
+		// Tailscale
+		auth.GET("/api/tailscale/autostart", service.TailscaleGetAutostartHandler)
+		auth.POST("/api/tailscale/autostart", service.TailscaleSetAutostartHandler)
 	}
 
 	address := fmt.Sprintf("%s:%s", config.DefaultConfig.Address, config.DefaultConfig.Port)

@@ -4388,15 +4388,66 @@ async function installTailscale() {
 
 async function startTailscale() {
   tsLoading.value = true
+  tsLog.value = '正在启动 tailscaled...\n'
   try {
-    const r = await execLocalCmd('nohup /data/plugins/tailscale/bin/tailscaled --socket=/tmp/tailscale-ufi.sock --state=/data/plugins/tailscale/tailscaled.state --tun=tailscale0 >/dev/null 2>&1 & sleep 2 && echo started', 10)
-    if (/started/.test(r.data || '')) {
-      ElMessage.success('已启动')
+    // 检查 /dev/net/tun
+    const tunChk = await execLocalCmd('[ -e /dev/net/tun ] && echo ok || { mkdir -p /dev/net && mknod /dev/net/tun c 10 200 && chmod 600 /dev/net/tun; }', 5)
+    if (!/ok/.test(tunChk.data || '')) {
+      tsLog.value += '创建 /dev/net/tun\n'
+    }
+
+    // 检查是否已有进程在运行
+    const pidChk = await execLocalCmd('pgrep tailscaled >/dev/null 2>&1 && echo running || echo not_running', 3)
+    if (/running/.test(pidChk.data || '')) {
+      tsLog.value += 'tailscaled 已在运行\n'
+      ElMessage.success('tailscaled 已在运行')
       await refreshTsStatus()
+      return
+    }
+
+    // 使用 setsid + nohup 双重保险启动，确保脱离控制终端
+    const startScript = [
+      'DIR="/data/plugins/tailscale"',
+      'BIN="$DIR/bin/tailscaled"',
+      '[ -x "$BIN" ] || { echo "ERROR: tailscaled 不存在"; exit 1; }',
+      'export PATH="$DIR/bin:$PATH"',
+      // 用 setsid 启动，脱离控制终端，避免 HTTP 请求结束后进程被 SIGHUP 杀死
+      'setsid sh -c \'',
+      '  nohup "$0" --socket="$1" --state="$2" --tun="$3" >"$4" 2>&1 &',
+      '  sleep 1',
+      '  pgrep -f tailscaled >/dev/null 2>&1 && echo "pid_ok" || echo "pid_fail"',
+      '\' "$BIN" /tmp/tailscale-ufi.sock "$DIR/tailscaled.state" tailscale0 "$DIR/tailscaled.log"',
+      '',
+      // 等待进程稳定
+      'for i in 1 2 3 4 5; do',
+      '  sleep 1',
+      '  pgrep -f tailscaled >/dev/null 2>&1 && { echo "started"; exit 0; }',
+      'done',
+      'echo "timeout"',
+    ].join('\n')
+
+    const r = await execLocalCmd(startScript, 15)
+    const out = (r.data || '').trim()
+    tsLog.value += out + '\n'
+
+    if (out.includes('started')) {
+      ElMessage.success('已启动')
+      // 多等几秒让 tailscaled 初始化
+      tsLog.value += '等待初始化...\n'
+      await new Promise(resolve => setTimeout(resolve, 3000))
+      await refreshTsStatus()
+    } else if (out.includes('pid_fail')) {
+      tsLog.value += '进程未能保持运行\n'
+      ElMessage.error('启动失败：进程未能保持运行')
+    } else if (out.includes('timeout')) {
+      tsLog.value += '启动超时\n'
+      ElMessage.error('启动超时')
     } else {
+      tsLog.value += '启动失败\n'
       ElMessage.error('启动失败')
     }
   } catch (e: any) {
+    tsLog.value += '启动异常: ' + (e.message || e) + '\n'
     ElMessage.error('启动失败: ' + (e.message || e))
   } finally {
     tsLoading.value = false
@@ -4405,12 +4456,27 @@ async function startTailscale() {
 
 async function stopTailscale() {
   tsLoading.value = true
+  tsLog.value = '正在停止 tailscaled...\n'
   try {
-    await execLocalCmd('killall tailscaled 2>/dev/null; echo stopped', 5)
-    ElMessage.success('已停止')
+    const script = [
+      'killall tailscaled 2>/dev/null',
+      'sleep 1',
+      'pgrep tailscaled >/dev/null 2>&1 && { killall -9 tailscaled 2>/dev/null; sleep 1; }',
+      'pgrep tailscaled >/dev/null 2>&1 && echo "still_running" || echo "stopped"',
+    ].join('\n')
+    const r = await execLocalCmd(script, 10)
+    const out = (r.data || '').trim()
+    tsLog.value += out + '\n'
+    if (out.includes('stopped')) {
+      ElMessage.success('已停止')
+    } else {
+      ElMessage.warning('停止信号已发送')
+    }
     tsStatus.running = false
     tsStatus.tsIP = ''
+    tsStatus.hostname = ''
   } catch (e: any) {
+    tsLog.value += '停止异常: ' + (e.message || e) + '\n'
     ElMessage.error('停止失败: ' + (e.message || e))
   } finally {
     tsLoading.value = false

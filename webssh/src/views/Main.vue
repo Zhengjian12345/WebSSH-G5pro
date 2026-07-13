@@ -4348,19 +4348,39 @@ async function toggleTsAutoStart(val: boolean) {
     const DIR = '/data/plugins/tailscale'
     const marker = TS_AUTOSTART_MARKER
     if (val) {
-      // 添加自启动：先移除旧的，再追加新的
+      // 添加自启动：在 exit 0 之前插入，确保能执行到
       const script = [
-        `sed -i '/${marker}/,+3d' /etc/rc.local 2>/dev/null`,
-        `cat >> /etc/rc.local << 'EOF'`,
+        // 先移除旧的标记块（+6 = marker + 6行内容）
+        `sed -i '/${marker}/,+6d' /etc/rc.local 2>/dev/null`,
+        // 确保 rc.local 存在且有执行权限
+        'touch /etc/rc.local',
+        'chmod +x /etc/rc.local',
+        // 生成自启动脚本块（marker + 7行）
+        `cat > /tmp/ts_autostart.txt << 'EOFBLOCK'`,
         `${marker}`,
         `if [ -x ${DIR}/bin/tailscaled ]; then`,
-        `  ${DIR}/bin/tailscaled --socket=/tmp/tailscale-ufi.sock --state=${DIR}/tailscaled.state --tun=tailscale0 >/dev/null 2>&1 &`,
+        `  # 等待网络就绪（最多 30 秒）`,
+        `  for i in 1 2 3 4 5 6; do`,
+        `    ping -c 1 -W 2 223.5.5.5 >/dev/null 2>&1 && break`,
+        `    sleep 5`,
+        `  done`,
+        `  # 创建 TUN 设备`,
+        `  [ -c /dev/net/tun ] || { mkdir -p /dev/net && mknod /dev/net/tun c 10 200 && chmod 600 /dev/net/tun; }`,
+        `  # 启动 tailscaled`,
+        `  ${DIR}/bin/tailscaled --socket=/tmp/tailscale-ufi.sock --state=${DIR}/tailscaled.state --tun=tailscale0 >${DIR}/tailscaled.log 2>&1 &`,
         `  echo $! > ${DIR}/tailscaled.pid`,
         `fi`,
-        `EOF`,
+        `EOFBLOCK`,
+        // 在 exit 0 之前插入；如果没有 exit 0 则追加到末尾
+        `if grep -q '^exit 0' /etc/rc.local 2>/dev/null; then`,
+        `  sed -i '/^exit 0$/e cat /tmp/ts_autostart.txt' /etc/rc.local`,
+        `else`,
+        `  cat /tmp/ts_autostart.txt >> /etc/rc.local`,
+        `fi`,
+        `rm -f /tmp/ts_autostart.txt`,
         'echo done',
       ].join('\n')
-      const r = await execLocalCmd(script, 5)
+      const r = await execLocalCmd(script, 8)
       if (!/done/.test(r.data || '')) {
         tsAutoStart.value = false
         ElMessage.error('设置失败')
@@ -4369,7 +4389,7 @@ async function toggleTsAutoStart(val: boolean) {
       }
     } else {
       const script = [
-        `sed -i '/${marker}/,+5d' /etc/rc.local 2>/dev/null`,
+        `sed -i '/${marker}/,+8d' /etc/rc.local 2>/dev/null`,
         'echo done',
       ].join('\n')
       const r = await execLocalCmd(script, 5)

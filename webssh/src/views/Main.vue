@@ -4343,9 +4343,9 @@ async function refreshTsStatus() {
     const ver = await execLocalCmd(`${DIR}/bin/tailscale version 2>/dev/null | head -n 1`, 5)
     tsStatus.version = (ver.data || '').trim()
 
-    // 3. 检查进程是否存在（PID 文件）
+    // 3. 检查进程是否存在（PID 文件 + pgrep 兜底）
     const pidChk = await execLocalCmd(
-      `PID=$(cat ${DIR}/tailscaled.pid 2>/dev/null); [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null && echo "proc_ok" || echo "proc_notfound"`,
+      `PID=$(cat ${DIR}/tailscaled.pid 2>/dev/null); [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null && echo "proc_ok" || (pgrep tailscaled >/dev/null 2>&1 && echo "proc_ok") || echo "proc_notfound"`,
       3
     )
     const procAlive = /proc_ok/.test(pidChk.data || '')

@@ -4326,8 +4326,10 @@ const tsForm = reactive({
 
 async function refreshTsStatus() {
   tsRefreshing.value = true
+  const DIR = '/data/plugins/tailscale'
   try {
-    const r = await execLocalCmd('[ -x /data/plugins/tailscale/bin/tailscale ] && echo installed || echo not_installed', 5)
+    // 1. 检查是否安装
+    const r = await execLocalCmd(`[ -x ${DIR}/bin/tailscale ] && echo installed || echo not_installed`, 5)
     tsStatus.installed = /installed/.test(r.data || '')
     if (!tsStatus.installed) {
       tsStatus.running = false
@@ -4336,14 +4338,41 @@ async function refreshTsStatus() {
       tsStatus.hostname = ''
       return
     }
-    const ver = await execLocalCmd('/data/plugins/tailscale/bin/tailscale version 2>/dev/null | head -n 1', 5)
+
+    // 2. 获取版本
+    const ver = await execLocalCmd(`${DIR}/bin/tailscale version 2>/dev/null | head -n 1`, 5)
     tsStatus.version = (ver.data || '').trim()
-    const status = await execLocalCmd('/data/plugins/tailscale/bin/tailscale --socket=/tmp/tailscale-ufi.sock status --json 2>/dev/null || echo "{}"', 8)
+
+    // 3. 检查进程是否存在（PID 文件）
+    const pidChk = await execLocalCmd(
+      `PID=$(cat ${DIR}/tailscaled.pid 2>/dev/null); [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null && echo "proc_ok" || echo "proc_notfound"`,
+      3
+    )
+    const procAlive = /proc_ok/.test(pidChk.data || '')
+
+    // 4. 尝试获取 tailscale 状态
+    const status = await execLocalCmd(
+      `${DIR}/bin/tailscale --socket=/tmp/tailscale-ufi.sock status --json 2>/dev/null`,
+      10
+    )
     let st: any = {}
-    try { st = JSON.parse(status.data || '{}') } catch { st = {} }
-    tsStatus.running = !!st?.Self?.PublicKey
-    tsStatus.tsIP = st?.Self?.TailscaleIPs?.[0] || ''
-    tsStatus.hostname = st?.Self?.HostName || ''
+    let statusOk = false
+    try {
+      st = JSON.parse(status.data || '{}')
+      statusOk = !!st?.Self?.PublicKey
+    } catch { /* 解析失败 */ }
+
+    // 5. 综合判断运行状态
+    tsStatus.running = procAlive || statusOk
+    if (statusOk) {
+      tsStatus.tsIP = st?.Self?.TailscaleIPs?.[0] || ''
+      tsStatus.hostname = st?.Self?.HostName || ''
+    } else if (!procAlive) {
+      tsStatus.tsIP = ''
+      tsStatus.hostname = ''
+      tsStatus.loginUrl = ''
+    }
+    // 如果进程存活但状态获取失败，可能是还在初始化中，保留之前的 IP/hostname
   } catch (e: any) {
     ElMessage.error('获取状态失败: ' + (e.message || e))
   } finally {
@@ -4388,66 +4417,96 @@ async function installTailscale() {
 
 async function startTailscale() {
   tsLoading.value = true
-  tsLog.value = '正在启动 tailscaled...\n'
+  tsLog.value = ''
   try {
-    // 检查 /dev/net/tun
-    const tunChk = await execLocalCmd('[ -e /dev/net/tun ] && echo ok || { mkdir -p /dev/net && mknod /dev/net/tun c 10 200 && chmod 600 /dev/net/tun; }', 5)
-    if (!/ok/.test(tunChk.data || '')) {
-      tsLog.value += '创建 /dev/net/tun\n'
-    }
+    const DIR = '/data/plugins/tailscale'
 
-    // 检查是否已有进程在运行
-    const pidChk = await execLocalCmd('pgrep tailscaled >/dev/null 2>&1 && echo running || echo not_running', 3)
-    if (/running/.test(pidChk.data || '')) {
-      tsLog.value += 'tailscaled 已在运行\n'
-      ElMessage.success('tailscaled 已在运行')
+    // 1. 检查 /dev/net/tun
+    const tunChk = await execLocalCmd(
+      '[ -c /dev/net/tun ] && echo "tun_ok" || { mkdir -p /dev/net && mknod /dev/net/tun c 10 200 2>/dev/null && chmod 600 /dev/net/tun 2>/dev/null; [ -c /dev/net/tun ] && echo "tun_created" || echo "tun_fail"; }',
+      5
+    )
+    tsLog.value += `TUN: ${(tunChk.data || '').trim()}\n`
+
+    // 2. 检查是否已在运行（通过 PID 文件 + pgrep 双重确认）
+    const pidChk = await execLocalCmd(
+      `PID=$(cat ${DIR}/tailscaled.pid 2>/dev/null); [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null && echo "pid_ok $PID" || echo "pid_notfound"`,
+      3
+    )
+    if (/pid_ok/.test(pidChk.data || '')) {
+      tsLog.value += '进程已在运行\n'
+      ElMessage.info('tailscaled 已在运行')
       await refreshTsStatus()
       return
     }
 
-    // 使用 setsid + nohup 双重保险启动，确保脱离控制终端
-    const startScript = [
-      'DIR="/data/plugins/tailscale"',
-      'BIN="$DIR/bin/tailscaled"',
-      '[ -x "$BIN" ] || { echo "ERROR: tailscaled 不存在"; exit 1; }',
-      'export PATH="$DIR/bin:$PATH"',
-      // 用 setsid 启动，脱离控制终端，避免 HTTP 请求结束后进程被 SIGHUP 杀死
-      'setsid sh -c \'',
-      '  nohup "$0" --socket="$1" --state="$2" --tun="$3" >"$4" 2>&1 &',
-      '  sleep 1',
-      '  pgrep -f tailscaled >/dev/null 2>&1 && echo "pid_ok" || echo "pid_fail"',
-      '\' "$BIN" /tmp/tailscale-ufi.sock "$DIR/tailscaled.state" tailscale0 "$DIR/tailscaled.log"',
-      '',
-      // 等待进程稳定
-      'for i in 1 2 3 4 5; do',
-      '  sleep 1',
-      '  pgrep -f tailscaled >/dev/null 2>&1 && { echo "started"; exit 0; }',
-      'done',
-      'echo "timeout"',
-    ].join('\n')
+    // 3. 写启动脚本到文件，彻底避免 shell 引号嵌套问题
+    const startSh = `#!/bin/sh
+DIR="${DIR}"
+BIN="$DIR/bin/tailscaled"
+[ -x "$BIN" ] || { echo "no_bin"; exit 1; }
+mkdir -p "$DIR"
+nohup "$BIN" --socket=/tmp/tailscale-ufi.sock --state="$DIR/tailscaled.state" --tun=tailscale0 >"$DIR/tailscaled.log" 2>&1 &
+echo $! > "$DIR/tailscaled.pid"
+echo "started $!"
+`
+    await execLocalCmd(
+      `cat > ${DIR}/start.sh << 'EOFSCRIPT'
+${startSh}EOFSCRIPT
+chmod +x ${DIR}/start.sh`,
+      5
+    )
 
-    const r = await execLocalCmd(startScript, 15)
+    // 4. 执行启动脚本
+    const r = await execLocalCmd(`/bin/sh ${DIR}/start.sh`, 5)
     const out = (r.data || '').trim()
-    tsLog.value += out + '\n'
+    tsLog.value += `${out}\n`
 
-    if (out.includes('started')) {
-      ElMessage.success('已启动')
-      // 多等几秒让 tailscaled 初始化
-      tsLog.value += '等待初始化...\n'
-      await new Promise(resolve => setTimeout(resolve, 3000))
-      await refreshTsStatus()
-    } else if (out.includes('pid_fail')) {
-      tsLog.value += '进程未能保持运行\n'
-      ElMessage.error('启动失败：进程未能保持运行')
-    } else if (out.includes('timeout')) {
-      tsLog.value += '启动超时\n'
-      ElMessage.error('启动超时')
-    } else {
-      tsLog.value += '启动失败\n'
+    if (!/started/.test(out)) {
+      tsLog.value += '启动脚本执行失败\n'
       ElMessage.error('启动失败')
+      return
+    }
+
+    // 5. 等待进程稳定
+    tsLog.value += '等待进程稳定...\n'
+    let alive = false
+    for (let i = 0; i < 10; i++) {
+      await new Promise(r => setTimeout(r, 1000))
+      const check = await execLocalCmd(
+        `PID=$(cat ${DIR}/tailscaled.pid 2>/dev/null); [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null && echo "alive $PID" || echo "dead"`,
+        3
+      )
+      if (/alive/.test(check.data || '')) {
+        alive = true
+        tsLog.value += `进程已稳定运行 (PID: ${(check.data || '').match(/\d+/)?.[0] || '?'})\n`
+        break
+      }
+    }
+    if (!alive) {
+      const log = await execLocalCmd(`cat ${DIR}/tailscaled.log 2>/dev/null | tail -n 10`, 5)
+      tsLog.value += '进程未存活，日志:\n' + (log.data || '无日志') + '\n'
+      ElMessage.error('进程启动后未保持运行')
+      return
+    }
+
+    // 6. 等待 tailscaled 初始化（需要更长时间）
+    tsLog.value += '等待初始化...\n'
+    await new Promise(r => setTimeout(r, 6000))
+
+    // 7. 检查状态
+    await refreshTsStatus()
+
+    if (tsStatus.running) {
+      ElMessage.success('启动成功')
+    } else {
+      // tailscaled 可能还在初始化中，再检查一次日志
+      const log = await execLocalCmd(`cat ${DIR}/tailscaled.log 2>/dev/null | tail -n 15`, 5)
+      tsLog.value += '进程已启动，状态获取中。日志:\n' + (log.data || '无日志') + '\n'
+      ElMessage.warning('进程已启动，请稍后刷新状态')
     }
   } catch (e: any) {
-    tsLog.value += '启动异常: ' + (e.message || e) + '\n'
+    tsLog.value += '异常: ' + (e.message || e) + '\n'
     ElMessage.error('启动失败: ' + (e.message || e))
   } finally {
     tsLoading.value = false
@@ -4456,13 +4515,16 @@ async function startTailscale() {
 
 async function stopTailscale() {
   tsLoading.value = true
-  tsLog.value = '正在停止 tailscaled...\n'
+  tsLog.value = ''
   try {
+    const DIR = '/data/plugins/tailscale'
     const script = [
-      'killall tailscaled 2>/dev/null',
-      'sleep 1',
-      'pgrep tailscaled >/dev/null 2>&1 && { killall -9 tailscaled 2>/dev/null; sleep 1; }',
-      'pgrep tailscaled >/dev/null 2>&1 && echo "still_running" || echo "stopped"',
+      `PID=$(cat ${DIR}/tailscaled.pid 2>/dev/null)`,
+      '[ -n "$PID" ] && kill "$PID" 2>/dev/null',
+      'sleep 2',
+      '[ -n "$PID" ] && kill -0 "$PID" 2>/dev/null && { kill -9 "$PID" 2>/dev/null; sleep 1; }',
+      '[ -n "$PID" ] && kill -0 "$PID" 2>/dev/null && echo "still_running" || echo "stopped"',
+      `rm -f ${DIR}/tailscaled.pid`,
     ].join('\n')
     const r = await execLocalCmd(script, 10)
     const out = (r.data || '').trim()
@@ -4475,6 +4537,7 @@ async function stopTailscale() {
     tsStatus.running = false
     tsStatus.tsIP = ''
     tsStatus.hostname = ''
+    tsStatus.loginUrl = ''
   } catch (e: any) {
     tsLog.value += '停止异常: ' + (e.message || e) + '\n'
     ElMessage.error('停止失败: ' + (e.message || e))
@@ -4485,23 +4548,69 @@ async function stopTailscale() {
 
 async function loginTailscale() {
   tsLoading.value = true
-  tsLog.value = '正在获取登录链接...'
+  tsLog.value = ''
+  const DIR = '/data/plugins/tailscale'
   try {
+    // 1. 确保 tailscaled 在运行
+    const pidChk = await execLocalCmd(
+      `PID=$(cat ${DIR}/tailscaled.pid 2>/dev/null); [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null && echo "proc_ok" || echo "proc_notfound"`,
+      3
+    )
+    if (!/proc_ok/.test(pidChk.data || '')) {
+      tsLog.value = 'tailscaled 未运行，请先启动\n'
+      ElMessage.warning('请先启动 tailscaled')
+      return
+    }
+
+    // 2. 在后台运行 tailscale up，输出到文件
     const hostname = 'ufi-' + (Math.random().toString(36).substring(2, 8))
-    const r = await execLocalCmd('/data/plugins/tailscale/bin/tailscale --socket=/tmp/tailscale-ufi.sock up --hostname=' + hostname + ' --advertise-routes=192.168.98.0/24 --accept-routes=false --ssh=false 2>&1 & sleep 5 && grep -oE "https://login\\.tailscale\\.com/[^[:space:]]+" /tmp/tailscale-login.log 2>/dev/null || echo "请手动执行 tailscale up"', 15)
-    const out = (r.data || '').trim()
-    const url = out.match(/https:\/\/login\.tailscale\.com\/[^\s]+/)?.[0]
+    const loginScript = [
+      `cd ${DIR}`,
+      `nohup ${DIR}/bin/tailscale --socket=/tmp/tailscale-ufi.sock up --hostname=${hostname} --advertise-routes=192.168.98.0/24 --accept-routes=false --ssh=false >${DIR}/login.log 2>&1 &`,
+      'echo "login_bg_started"',
+    ].join('\n')
+    await execLocalCmd(loginScript, 5)
+
+    // 3. 等待 tailscale up 输出登录链接
+    tsLog.value += '等待登录链接生成...\n'
+    let url = ''
+    for (let i = 0; i < 15; i++) {
+      await new Promise(r => setTimeout(r, 1000))
+      const logCheck = await execLocalCmd(
+        `cat ${DIR}/login.log 2>/dev/null | grep -oE "https://login\\.tailscale\\.com/[^[:space:]]+" | head -n 1`,
+        5
+      )
+      const found = (logCheck.data || '').trim()
+      if (found.startsWith('https://')) {
+        url = found
+        break
+      }
+      // 检查是否已经完成（无需登录或已登录）
+      const doneCheck = await execLocalCmd(
+        `cat ${DIR}/login.log 2>/dev/null | tail -n 3`,
+        3
+      )
+      const doneOut = (doneCheck.data || '')
+      if (doneOut.includes('Success') || doneOut.includes('Already')) {
+        tsLog.value += '已登录或无需重新登录\n'
+        ElMessage.success('登录状态正常')
+        await refreshTsStatus()
+        return
+      }
+    }
+
     if (url) {
       tsStatus.loginUrl = url
-      tsLog.value = '登录链接已生成，请复制到浏览器打开授权'
+      tsLog.value += `登录链接: ${url}\n请复制到浏览器打开授权\n`
       ElMessage.success('登录链接已生成')
     } else {
-      tsLog.value = out
-      ElMessage.info('请手动执行 tailscale up 进行登录')
+      const log = await execLocalCmd(`cat ${DIR}/login.log 2>/dev/null | tail -n 20`, 5)
+      tsLog.value += '未获取到登录链接，日志:\n' + (log.data || '无日志') + '\n'
+      ElMessage.error('获取登录链接失败')
     }
     await refreshTsStatus()
   } catch (e: any) {
-    tsLog.value = '登录异常: ' + (e.message || e)
+    tsLog.value += '登录异常: ' + (e.message || e) + '\n'
     ElMessage.error('登录失败')
   } finally {
     tsLoading.value = false

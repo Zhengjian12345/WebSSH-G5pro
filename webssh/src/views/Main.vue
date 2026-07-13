@@ -5065,6 +5065,15 @@ watch(mmActiveTab, (tab) => {
   }
 })
 
+// 切换到 Tailscale / SIM 切卡 tab 时自动刷新状态
+watch(systemToolsActiveTab, (tab) => {
+  if (tab === 'tailscale') {
+    refreshTsStatus()
+  } else if (tab === 'simswitch') {
+    refreshSimStatus()
+  }
+})
+
 async function mmControl(action: string) {
   mmControlling.value = action
   mmControlOutput.value = ''

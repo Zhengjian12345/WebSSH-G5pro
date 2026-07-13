@@ -115,29 +115,6 @@
           </button>
 
           <button
-            class="quick-action-button"
-            :class="{ active: tsStatus.running }"
-            @click="openTsDialog"
-          >
-            <span class="quick-action-icon">TS</span>
-            <span class="quick-action-copy">
-              <span class="quick-action-title">Tailscale</span>
-              <span class="quick-action-subtitle">{{ tsStatus.running ? 'VPN 运行中' : 'VPN 已停止' }}</span>
-            </span>
-          </button>
-
-          <button
-            class="quick-action-button"
-            @click="simDialogVisible = true; refreshSimStatus()"
-          >
-            <span class="quick-action-icon">SC</span>
-            <span class="quick-action-copy">
-              <span class="quick-action-title">SIM 切卡</span>
-              <span class="quick-action-subtitle">飞猫分身卡</span>
-            </span>
-          </button>
-
-          <button
             class="wifi-mode-button"
             :class="{ active: wifiInfo.highPerformance, saving: wifiSettingsSaving }"
             :disabled="wifiSettingsSaving !== ''"
@@ -1135,110 +1112,7 @@
     </div>
   </el-dialog>
 
-  <!-- ───────── Tailscale 管理弹窗 ───────── -->
-  <el-dialog
-    v-model="tsDialogVisible"
-    title="Tailscale VPN"
-    width="min(560px, 94vw)"
-    :close-on-click-modal="true"
-    destroy-on-close
-    class="wireless-dialog">
-    <div class="ts-status-grid">
-      <div class="ts-stat">
-        <label>安装状态</label>
-        <span :class="tsStatus.installed ? 'ts-ok' : 'ts-muted'">{{ tsStatus.installed ? '已安装' : '未安装' }}</span>
-      </div>
-      <div class="ts-stat">
-        <label>运行状态</label>
-        <span :class="tsStatus.running ? 'ts-ok' : 'ts-warn'">{{ tsStatus.running ? '运行中' : '已停止' }}</span>
-      </div>
-      <div class="ts-stat">
-        <label>Tailscale IP</label>
-        <span class="ts-code">{{ tsStatus.tsIP || '-' }}</span>
-      </div>
-      <div class="ts-stat">
-        <label>主机名</label>
-        <span class="ts-code">{{ tsStatus.hostname || '-' }}</span>
-      </div>
-      <div class="ts-stat">
-        <label>版本</label>
-        <span>{{ tsStatus.version || '-' }}</span>
-      </div>
-    </div>
-    <div v-if="tsStatus.loginUrl" class="ts-card">
-      <div class="ts-title"><strong>登录授权</strong></div>
-      <div class="ts-row">
-        <label>登录链接</label>
-        <el-input v-model="tsStatus.loginUrl" readonly size="small" />
-      </div>
-      <div class="ts-actions">
-        <el-button size="small" type="primary" @click="copyTsLoginUrl">复制链接</el-button>
-        <el-button size="small" @click="tsStatus.loginUrl = ''">关闭</el-button>
-      </div>
-    </div>
-    <div class="ts-card">
-      <div class="ts-title"><strong>子网路由</strong></div>
-      <div class="ts-row">
-        <label>宣告路由</label>
-        <el-switch v-model="tsForm.advertiseRoutes" active-text="开启" inactive-text="关闭" />
-      </div>
-      <div class="ts-row">
-        <label>接受路由</label>
-        <el-switch v-model="tsForm.acceptRoutes" active-text="开启" inactive-text="关闭" />
-      </div>
-      <div class="ts-row">
-        <label>SNAT</label>
-        <el-switch v-model="tsForm.snat" active-text="开启" inactive-text="关闭" />
-      </div>
-    </div>
-    <div class="ts-actions">
-      <el-button v-if="!tsStatus.installed" type="primary" :loading="tsInstalling" @click="installTailscale" style="flex:1;">安装 Tailscale</el-button>
-      <el-button v-if="tsStatus.installed && !tsStatus.running" type="success" :loading="tsLoading" @click="startTailscale" style="flex:1;">启动</el-button>
-      <el-button v-if="tsStatus.installed && tsStatus.running" type="danger" :loading="tsLoading" @click="stopTailscale" style="flex:1;">停止</el-button>
-      <el-button v-if="tsStatus.installed && tsStatus.running" type="primary" :loading="tsLoading" @click="loginTailscale" style="flex:1;">登录</el-button>
-      <el-button v-if="tsStatus.installed && tsStatus.running" :loading="tsLoading" @click="logoutTailscale" style="flex:1;">登出</el-button>
-      <el-button v-if="tsStatus.installed" :loading="tsLoading" @click="uninstallTailscale" style="flex:1;">卸载</el-button>
-      <el-button :loading="tsRefreshing" @click="refreshTsStatus" style="flex:1;">刷新</el-button>
-    </div>
-    <pre v-if="tsLog" class="ts-log">{{ tsLog }}</pre>
-    <div class="ft-note">
-      注：Tailscale 创建安全的 WireGuard mesh VPN。开启子网路由后，其他 Tailscale 节点可通过此设备访问 LAN。
-      登录后请访问 https://login.tailscale.com/admin/machines 管理节点和 ACL。
-    </div>
-  </el-dialog>
 
-  <!-- ───────── SIM 切卡弹窗 ───────── -->
-  <el-dialog
-    v-model="simDialogVisible"
-    title="SIM 切卡（飞猫分身卡）"
-    width="min(480px, 94vw)"
-    :close-on-click-modal="false"
-    destroy-on-close
-    class="wireless-dialog">
-    <div class="sim-netinfo">{{ simNetInfo }}</div>
-    <div class="sim-warning">
-      <strong>⚠️ 高风险操作</strong><br>
-      仅适用于飞猫分身卡，非分身卡会锁卡！<br>
-      切换时请勿关闭浏览器或切换 WiFi。
-    </div>
-    <div class="sim-actions">
-      <el-button type="primary" :disabled="simCdSec > 0 || simSwitching" :loading="simSwitching && simSwitchingTo === '移动'" @click="switchSim('0200', '移动')" style="flex:1;">
-        {{ simCdSec > 0 ? `移动 (${simCdSec}s)` : '切换移动' }}
-      </el-button>
-      <el-button type="success" :disabled="simCdSec > 0 || simSwitching" :loading="simSwitching && simSwitchingTo === '联通'" @click="switchSim('0100', '联通')" style="flex:1;">
-        {{ simCdSec > 0 ? `联通 (${simCdSec}s)` : '切换联通' }}
-      </el-button>
-      <el-button type="warning" :disabled="simCdSec > 0 || simSwitching" :loading="simSwitching && simSwitchingTo === '电信'" @click="switchSim('0300', '电信')" style="flex:1;">
-        {{ simCdSec > 0 ? `电信 (${simCdSec}s)` : '切换电信' }}
-      </el-button>
-    </div>
-    <el-button :loading="simRefreshing" @click="refreshSimStatus" style="width:100%;margin-top:10px;">刷新网络状态</el-button>
-    <pre v-if="simLog" class="sim-log">{{ simLog }}</pre>
-    <div class="ft-note">
-      注：通过 AT 指令 AT+CLCK 切换飞猫分身卡。PIN 码：移动 0200 / 联通 0100 / 电信 0300。
-      切卡后自动等待网络恢复并校准系统时间。
-    </div>
-  </el-dialog>
 
   <!-- ───────── Mihomo 管理弹窗 ───────── -->
   <el-dialog
@@ -1827,6 +1701,90 @@
           <div v-if="rcLocal.status" class="local-speedtest-message">{{ rcLocal.status }}</div>
         </div>
       </el-tab-pane>
+
+      <el-tab-pane label="Tailscale" name="tailscale">
+        <div class="mh-info-grid" style="margin:0 0 12px">
+          <div class="mh-info-item">
+            <span class="mh-info-label">安装状态</span>
+            <span class="mh-info-value" :class="tsStatus.installed ? 'ts-ok' : 'ts-muted'">{{ tsStatus.installed ? '已安装' : '未安装' }}</span>
+          </div>
+          <div class="mh-info-item">
+            <span class="mh-info-label">运行状态</span>
+            <span class="mh-info-value" :class="tsStatus.running ? 'ts-ok' : 'ts-warn'">{{ tsStatus.running ? '运行中' : '已停止' }}</span>
+          </div>
+          <div class="mh-info-item">
+            <span class="mh-info-label">Tailscale IP</span>
+            <span class="mh-info-value ts-code">{{ tsStatus.tsIP || '-' }}</span>
+          </div>
+          <div class="mh-info-item">
+            <span class="mh-info-label">主机名</span>
+            <span class="mh-info-value ts-code">{{ tsStatus.hostname || '-' }}</span>
+          </div>
+          <div class="mh-info-item">
+            <span class="mh-info-label">版本</span>
+            <span class="mh-info-value">{{ tsStatus.version || '-' }}</span>
+          </div>
+        </div>
+        <div v-if="tsStatus.loginUrl" class="ts-card" style="margin-bottom:12px">
+          <div class="mh-info-item" style="margin-bottom:8px">
+            <span class="mh-info-label">登录链接</span>
+            <el-input v-model="tsStatus.loginUrl" readonly size="small" />
+          </div>
+          <el-button size="small" type="primary" @click="copyTsLoginUrl">复制链接</el-button>
+        </div>
+        <div class="mh-sub-section" style="margin-bottom:12px">
+          <div class="settings-section-title">子网路由</div>
+          <div class="mh-info-grid">
+            <div class="mh-info-item">
+              <span class="mh-info-label">宣告路由</span>
+              <el-switch v-model="tsForm.advertiseRoutes" active-text="开" inactive-text="关" />
+            </div>
+            <div class="mh-info-item">
+              <span class="mh-info-label">接受路由</span>
+              <el-switch v-model="tsForm.acceptRoutes" active-text="开" inactive-text="关" />
+            </div>
+            <div class="mh-info-item">
+              <span class="mh-info-label">SNAT</span>
+              <el-switch v-model="tsForm.snat" active-text="开" inactive-text="关" />
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <el-button v-if="!tsStatus.installed" type="primary" :loading="tsInstalling" @click="installTailscale" style="flex:1;">安装</el-button>
+          <el-button v-if="tsStatus.installed && !tsStatus.running" type="success" :loading="tsLoading" @click="startTailscale" style="flex:1;">启动</el-button>
+          <el-button v-if="tsStatus.installed && tsStatus.running" type="danger" :loading="tsLoading" @click="stopTailscale" style="flex:1;">停止</el-button>
+          <el-button v-if="tsStatus.installed && tsStatus.running" type="primary" :loading="tsLoading" @click="loginTailscale" style="flex:1;">登录</el-button>
+          <el-button v-if="tsStatus.installed && tsStatus.running" :loading="tsLoading" @click="logoutTailscale" style="flex:1;">登出</el-button>
+          <el-button v-if="tsStatus.installed" :loading="tsLoading" @click="uninstallTailscale" style="flex:1;">卸载</el-button>
+          <el-button :loading="tsRefreshing" @click="refreshTsStatus" style="flex:1;">刷新</el-button>
+        </div>
+        <pre v-if="tsLog" class="ts-log" style="margin-top:12px">{{ tsLog }}</pre>
+      </el-tab-pane>
+
+      <el-tab-pane label="SIM 切卡" name="simswitch">
+        <div class="sim-netinfo" style="margin:0 0 12px">{{ simNetInfo }}</div>
+        <div class="sim-warning" style="margin-bottom:12px">
+          <strong>⚠️ 高风险操作</strong><br>
+          仅适用于飞猫分身卡，非分身卡会锁卡！<br>
+          切换时请勿关闭浏览器或切换 WiFi。
+        </div>
+        <div class="mh-sub-section" style="margin-bottom:12px">
+          <div class="settings-section-title">切卡操作</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+            <el-button type="primary" :disabled="simCdSec > 0 || simSwitching" :loading="simSwitching && simSwitchingTo === '移动'" @click="switchSim('0200', '移动')" style="flex:1;">
+              {{ simCdSec > 0 ? `移动 (${simCdSec}s)` : '切换移动' }}
+            </el-button>
+            <el-button type="success" :disabled="simCdSec > 0 || simSwitching" :loading="simSwitching && simSwitchingTo === '联通'" @click="switchSim('0100', '联通')" style="flex:1;">
+              {{ simCdSec > 0 ? `联通 (${simCdSec}s)` : '切换联通' }}
+            </el-button>
+            <el-button type="warning" :disabled="simCdSec > 0 || simSwitching" :loading="simSwitching && simSwitchingTo === '电信'" @click="switchSim('0300', '电信')" style="flex:1;">
+              {{ simCdSec > 0 ? `电信 (${simCdSec}s)` : '切换电信' }}
+            </el-button>
+          </div>
+        </div>
+        <el-button :loading="simRefreshing" @click="refreshSimStatus" style="width:100%;">刷新网络状态</el-button>
+        <pre v-if="simLog" class="sim-log" style="margin-top:12px">{{ simLog }}</pre>
+      </el-tab-pane>
     </el-tabs>
     <template #footer>
       <el-button @click="systemToolsDialogVisible = false" :disabled="localSpeedTest.running">关闭</el-button>
@@ -2361,7 +2319,7 @@ const wifiSettingsSummary = computed(() => {
   return wifiSettingsSaving.value ? '应用中...' : `${wifiInfo.value.wifiStatus24 ? '2.4G开' : '2.4G关'} / ${wifiInfo.value.wifiStatus5 ? '5G开' : '5G关'}`;
 });
 
-type SystemToolsTab = 'speedtest' | 'sms' | 'rcLocal';
+type SystemToolsTab = 'speedtest' | 'sms' | 'rcLocal' | 'tailscale' | 'simswitch';
 
 interface SmsMessage {
   id: number;
@@ -2556,6 +2514,8 @@ function fmtTime(v: number, tMin: number): string {
 function openSystemToolsDialog(tab: SystemToolsTab = 'speedtest') {
   systemToolsActiveTab.value = tab;
   systemToolsDialogVisible.value = true;
+  if (tab === 'tailscale') { refreshTsStatus() }
+  if (tab === 'simswitch') { refreshSimStatus() }
   if (tab === 'sms') {
     loadSmsForwardStatus();
   }
@@ -4342,7 +4302,6 @@ async function doFixTime() {
   }
 }
 // ─────────────────────────── Tailscale ───────────────────────────
-const tsDialogVisible = ref(false)
 const tsLoading = ref(false)
 const tsRefreshing = ref(false)
 const tsInstalling = ref(false)
@@ -4364,11 +4323,6 @@ const tsForm = reactive({
   acceptRoutes: false,
   snat: true,
 })
-
-function openTsDialog() {
-  tsDialogVisible.value = true
-  refreshTsStatus()
-}
 
 async function refreshTsStatus() {
   tsRefreshing.value = true
@@ -4526,7 +4480,6 @@ function copyTsLoginUrl() {
 }
 
 // ─────────────────────────── SIM 切卡 ───────────────────────────
-const simDialogVisible = ref(false)
 const simSwitching = ref(false)
 const simSwitchingTo = ref('')
 const simRefreshing = ref(false)

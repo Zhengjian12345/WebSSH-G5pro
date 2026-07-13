@@ -1755,7 +1755,7 @@
           <el-button v-if="tsStatus.installed && tsStatus.running" type="danger" :loading="tsLoading" @click="stopTailscale" style="flex:1;">停止</el-button>
           <el-button v-if="tsStatus.installed && tsStatus.running" type="primary" :loading="tsLoading" @click="loginTailscale" style="flex:1;">登录</el-button>
           <el-button v-if="tsStatus.installed && tsStatus.running" :loading="tsLoading" @click="logoutTailscale" style="flex:1;">登出</el-button>
-          <el-button v-if="tsStatus.installed" :loading="tsLoading" @click="uninstallTailscale" style="flex:1;">卸载</el-button>
+          <el-button v-if="tsStatus.installed" :loading="tsUninstalling" @click="uninstallTailscale" style="flex:1;">卸载</el-button>
           <el-button :loading="tsRefreshing" @click="refreshTsStatus" style="flex:1;">刷新</el-button>
         </div>
         <pre v-if="tsLog" class="ts-log" style="margin-top:12px">{{ tsLog }}</pre>
@@ -4305,6 +4305,7 @@ async function doFixTime() {
 const tsLoading = ref(false)
 const tsRefreshing = ref(false)
 const tsInstalling = ref(false)
+const tsUninstalling = ref(false)
 const tsLog = ref('')
 
 interface TsStatus {
@@ -4632,7 +4633,7 @@ async function logoutTailscale() {
 }
 
 async function uninstallTailscale() {
-  tsLoading.value = true
+  tsUninstalling.value = true
   try {
     await execLocalCmd('killall tailscaled 2>/dev/null; rm -rf /data/plugins/tailscale; echo removed', 10)
     tsStatus.installed = false
@@ -4645,7 +4646,7 @@ async function uninstallTailscale() {
   } catch (e: any) {
     ElMessage.error('卸载失败: ' + (e.message || e))
   } finally {
-    tsLoading.value = false
+    tsUninstalling.value = false
   }
 }
 

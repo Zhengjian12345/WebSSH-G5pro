@@ -4337,24 +4337,63 @@ const tsAutoStart = ref(false)
 const tsAutoStartChanging = ref(false)
 
 async function checkTsAutoStart() {
-  try {
-    const r = await axios.get('/api/tailscale/autostart')
-    if (r.data.code === 0) {
-      tsAutoStart.value = r.data.data?.enabled || false
-    }
-  } catch { /* ignore */ }
+  const r = await execLocalCmd('grep -q "tailscaled.*tailscale-ufi.sock" /etc/rc.local 2>/dev/null && echo on || echo off', 3)
+  tsAutoStart.value = /on/.test(r.data || '')
 }
 
 async function toggleTsAutoStart(val: boolean) {
   tsAutoStartChanging.value = true
   try {
-    const r = await axios.post('/api/tailscale/autostart', { enabled: val })
-    if (r.data.code === 0) {
-      tsAutoStart.value = val
-      ElMessage.success(val ? '已开启自启动' : '已关闭自启动')
+    const DIR = '/data/plugins/tailscale'
+    const cmd = '/data/plugins/tailscale/bin/tailscaled'
+    if (val) {
+      // 先确保没有旧的残留
+      const removeOld = [
+        `sed -i '/# \[WebSSH\] Tailscale autostart/d' /etc/rc.local 2>/dev/null`,
+        `sed -i '/tailscaled.*tailscale-ufi.sock/d' /etc/rc.local 2>/dev/null`,
+        `sed -i '/^[[:space:]]*echo \$!.*tailscaled\.pid/d' /etc/rc.local 2>/dev/null`,
+        'touch /etc/rc.local',
+        'chmod +x /etc/rc.local',
+      ].join('\n')
+      await execLocalCmd(removeOld, 5)
+
+      // 生成启动脚本（单行，避免多行 sed 删除不准的问题）
+      const startLine = `[ -x ${cmd} ] && { [ -c /dev/net/tun ] || { mkdir -p /dev/net && mknod /dev/net/tun c 10 200 && chmod 600 /dev/net/tun; }; sleep 10; ${cmd} --socket=/tmp/tailscale-ufi.sock --state=${DIR}/tailscaled.state --tun=tailscale0 >${DIR}/tailscaled.log 2>&1 & echo $! > ${DIR}/tailscaled.pid; }`
+
+      // 在 exit 0 之前插入；没有 exit 0 则追加
+      const insertScript = [
+        `LINE='${startLine}'`,
+        `if grep -q '^exit 0' /etc/rc.local 2>/dev/null; then`,
+        `  sed -i "/^exit 0$/i\\$LINE" /etc/rc.local`,
+        `else`,
+        `  echo "$LINE" >> /etc/rc.local`,
+        `fi`,
+        'echo done',
+      ].join('\n')
+      const r = await execLocalCmd(insertScript, 5)
+      if (!/done/.test(r.data || '')) {
+        tsAutoStart.value = false
+        ElMessage.error('设置失败')
+        return
+      }
+      tsAutoStart.value = true
+      ElMessage.success('已开启自启动')
     } else {
-      tsAutoStart.value = !val
-      ElMessage.error(r.data.msg || '设置失败')
+      // 关闭：删除所有包含 tailscaled 的行
+      const script = [
+        `sed -i '/# \[WebSSH\] Tailscale autostart/d' /etc/rc.local 2>/dev/null`,
+        `sed -i '/tailscaled.*tailscale-ufi.sock/d' /etc/rc.local 2>/dev/null`,
+        `sed -i '/^[[:space:]]*echo \$!.*tailscaled\.pid/d' /etc/rc.local 2>/dev/null`,
+        'echo done',
+      ].join('\n')
+      const r = await execLocalCmd(script, 5)
+      if (!/done/.test(r.data || '')) {
+        tsAutoStart.value = true
+        ElMessage.error('设置失败')
+        return
+      }
+      tsAutoStart.value = false
+      ElMessage.success('已关闭自启动')
     }
   } catch (e: any) {
     tsAutoStart.value = !val

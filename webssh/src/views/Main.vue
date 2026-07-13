@@ -4345,53 +4345,59 @@ async function toggleTsAutoStart(val: boolean) {
   tsAutoStartChanging.value = true
   try {
     const DIR = '/data/plugins/tailscale'
-    const cmd = '/data/plugins/tailscale/bin/tailscaled'
+    const cmd = DIR + '/bin/tailscaled'
     if (val) {
-      // 先确保没有旧的残留
-      const removeOld = [
-        `sed -i '/# \[WebSSH\] Tailscale autostart/d' /etc/rc.local 2>/dev/null`,
-        `sed -i '/tailscaled.*tailscale-ufi.sock/d' /etc/rc.local 2>/dev/null`,
-        `sed -i '/^[[:space:]]*echo \$!.*tailscaled\.pid/d' /etc/rc.local 2>/dev/null`,
-        'touch /etc/rc.local',
-        'chmod +x /etc/rc.local',
+      // 先清理所有可能的残留
+      await execLocalCmd(
+        `sed -i '/# \\[WebSSH\\] Tailscale autostart/d; /tailscaled.*tailscale-ufi\\.sock/d; /echo \\$!.*tailscaled\\.pid/d' /etc/rc.local 2>/dev/null; echo cleaned`,
+        5
+      )
+
+      // 把启动行写入临时文件（避免 shell 引号和特殊字符问题）
+      const startLine = '[ -x ' + cmd + ' ] && { [ -c /dev/net/tun ] || { mkdir -p /dev/net && mknod /dev/net/tun c 10 200 && chmod 600 /dev/net/tun; }; sleep 10; ' + cmd + ' --socket=/tmp/tailscale-ufi.sock --state=' + DIR + '/tailscaled.state --tun=tailscale0 >' + DIR + '/tailscaled.log 2>&1 & echo $! > ' + DIR + '/tailscaled.pid; }'
+
+      const writeScript = [
+        'cat > /tmp/ts_rc_line.txt << \'TSEOF\'',
+        startLine,
+        'TSEOF',
+        'echo written',
       ].join('\n')
-      await execLocalCmd(removeOld, 5)
+      const wr = await execLocalCmd(writeScript, 5)
+      if (!/written/.test(wr.data || '')) {
+        tsAutoStart.value = false
+        ElMessage.error('写入临时文件失败')
+        return
+      }
 
-      // 生成启动脚本（单行，避免多行 sed 删除不准的问题）
-      const startLine = `[ -x ${cmd} ] && { [ -c /dev/net/tun ] || { mkdir -p /dev/net && mknod /dev/net/tun c 10 200 && chmod 600 /dev/net/tun; }; sleep 10; ${cmd} --socket=/tmp/tailscale-ufi.sock --state=${DIR}/tailscaled.state --tun=tailscale0 >${DIR}/tailscaled.log 2>&1 & echo $! > ${DIR}/tailscaled.pid; }`
-
-      // 在 exit 0 之前插入；没有 exit 0 则追加
+      // 用 head/tail/cat 拼接方式插入，彻底避免 sed 特殊字符问题
       const insertScript = [
-        `LINE='${startLine}'`,
-        `if grep -q '^exit 0' /etc/rc.local 2>/dev/null; then`,
-        `  sed -i "/^exit 0$/i\\$LINE" /etc/rc.local`,
-        `else`,
-        `  echo "$LINE" >> /etc/rc.local`,
-        `fi`,
+        'EXITLN=$(grep -n "^exit 0" /etc/rc.local 2>/dev/null | tail -1 | cut -d: -f1)',
+        'if [ -n "$EXITLN" ] && [ "$EXITLN" -gt 0 ]; then',
+        '  head -n $((EXITLN-1)) /etc/rc.local > /tmp/rc_local_new.tmp',
+        '  cat /tmp/ts_rc_line.txt >> /tmp/rc_local_new.tmp',
+        '  tail -n +$EXITLN /etc/rc.local >> /tmp/rc_local_new.tmp',
+        '  mv /tmp/rc_local_new.tmp /etc/rc.local',
+        '  chmod +x /etc/rc.local',
+        'else',
+        '  cat /tmp/ts_rc_line.txt >> /etc/rc.local',
+        'fi',
+        'rm -f /tmp/ts_rc_line.txt',
         'echo done',
       ].join('\n')
-      const r = await execLocalCmd(insertScript, 5)
+      const r = await execLocalCmd(insertScript, 8)
       if (!/done/.test(r.data || '')) {
         tsAutoStart.value = false
-        ElMessage.error('设置失败')
+        ElMessage.error('插入自启动行失败')
         return
       }
       tsAutoStart.value = true
       ElMessage.success('已开启自启动')
     } else {
       // 关闭：删除所有包含 tailscaled 的行
-      const script = [
-        `sed -i '/# \[WebSSH\] Tailscale autostart/d' /etc/rc.local 2>/dev/null`,
-        `sed -i '/tailscaled.*tailscale-ufi.sock/d' /etc/rc.local 2>/dev/null`,
-        `sed -i '/^[[:space:]]*echo \$!.*tailscaled\.pid/d' /etc/rc.local 2>/dev/null`,
-        'echo done',
-      ].join('\n')
-      const r = await execLocalCmd(script, 5)
-      if (!/done/.test(r.data || '')) {
-        tsAutoStart.value = true
-        ElMessage.error('设置失败')
-        return
-      }
+      await execLocalCmd(
+        `sed -i '/# \\[WebSSH\\] Tailscale autostart/d; /tailscaled.*tailscale-ufi\\.sock/d; /echo \\$!.*tailscaled\\.pid/d; /\\$LINE/d' /etc/rc.local 2>/dev/null; echo done`,
+        5
+      )
       tsAutoStart.value = false
       ElMessage.success('已关闭自启动')
     }

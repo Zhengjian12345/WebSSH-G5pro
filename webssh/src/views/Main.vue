@@ -127,6 +127,17 @@
           </button>
 
           <button
+            class="quick-action-button"
+            @click="simDialogVisible = true; refreshSimStatus()"
+          >
+            <span class="quick-action-icon">SC</span>
+            <span class="quick-action-copy">
+              <span class="quick-action-title">SIM 切卡</span>
+              <span class="quick-action-subtitle">飞猫分身卡</span>
+            </span>
+          </button>
+
+          <button
             class="wifi-mode-button"
             :class="{ active: wifiInfo.highPerformance, saving: wifiSettingsSaving }"
             :disabled="wifiSettingsSaving !== ''"
@@ -1193,6 +1204,39 @@
     <div class="ft-note">
       注：Tailscale 创建安全的 WireGuard mesh VPN。开启子网路由后，其他 Tailscale 节点可通过此设备访问 LAN。
       登录后请访问 https://login.tailscale.com/admin/machines 管理节点和 ACL。
+    </div>
+  </el-dialog>
+
+  <!-- ───────── SIM 切卡弹窗 ───────── -->
+  <el-dialog
+    v-model="simDialogVisible"
+    title="SIM 切卡（飞猫分身卡）"
+    width="min(480px, 94vw)"
+    :close-on-click-modal="false"
+    destroy-on-close
+    class="wireless-dialog">
+    <div class="sim-netinfo">{{ simNetInfo }}</div>
+    <div class="sim-warning">
+      <strong>⚠️ 高风险操作</strong><br>
+      仅适用于飞猫分身卡，非分身卡会锁卡！<br>
+      切换时请勿关闭浏览器或切换 WiFi。
+    </div>
+    <div class="sim-actions">
+      <el-button type="primary" :disabled="simCdSec > 0 || simSwitching" :loading="simSwitching && simSwitchingTo === '移动'" @click="switchSim('0200', '移动')" style="flex:1;">
+        {{ simCdSec > 0 ? `移动 (${simCdSec}s)` : '切换移动' }}
+      </el-button>
+      <el-button type="success" :disabled="simCdSec > 0 || simSwitching" :loading="simSwitching && simSwitchingTo === '联通'" @click="switchSim('0100', '联通')" style="flex:1;">
+        {{ simCdSec > 0 ? `联通 (${simCdSec}s)` : '切换联通' }}
+      </el-button>
+      <el-button type="warning" :disabled="simCdSec > 0 || simSwitching" :loading="simSwitching && simSwitchingTo === '电信'" @click="switchSim('0300', '电信')" style="flex:1;">
+        {{ simCdSec > 0 ? `电信 (${simCdSec}s)` : '切换电信' }}
+      </el-button>
+    </div>
+    <el-button :loading="simRefreshing" @click="refreshSimStatus" style="width:100%;margin-top:10px;">刷新网络状态</el-button>
+    <pre v-if="simLog" class="sim-log">{{ simLog }}</pre>
+    <div class="ft-note">
+      注：通过 AT 指令 AT+CLCK 切换飞猫分身卡。PIN 码：移动 0200 / 联通 0100 / 电信 0300。
+      切卡后自动等待网络恢复并校准系统时间。
     </div>
   </el-dialog>
 
@@ -4481,6 +4525,193 @@ function copyTsLoginUrl() {
   navigator.clipboard.writeText(tsStatus.loginUrl).then(() => ElMessage.success('已复制')).catch(() => ElMessage.error('复制失败'))
 }
 
+// ─────────────────────────── SIM 切卡 ───────────────────────────
+const simDialogVisible = ref(false)
+const simSwitching = ref(false)
+const simSwitchingTo = ref('')
+const simRefreshing = ref(false)
+const simNetInfo = ref('检测中...')
+const simLog = ref('')
+const simCdSec = ref(0)
+let simCdTimer: ReturnType<typeof setInterval> | null = null
+let simAtPort = ''
+
+const SIM_PORTS = ['/dev/at_mdm0', '/dev/at_mdm1', '/dev/at_usb0', '/dev/smd7', '/dev/smd11']
+
+async function detectAtPort(): Promise<string | null> {
+  if (simAtPort) {
+    const r = await execLocalCmd(`[ -e ${simAtPort} ] && echo ok`, 3)
+    if ((r.data || '').trim() === 'ok') return simAtPort
+    simAtPort = ''
+  }
+  for (const p of SIM_PORTS) {
+    const r = await execLocalCmd(`[ -e ${p} ] && echo ok`, 3)
+    if ((r.data || '').trim() !== 'ok') continue
+    const test = await execLocalCmd(
+      `cat ${p} & PID=$!; sleep 0.5; printf 'AT\\x0d' > ${p}; sleep 1; kill $PID 2>/dev/null`,
+      8
+    )
+    if ((test.data || '').includes('OK')) {
+      simAtPort = p
+      return p
+    }
+  }
+  return null
+}
+
+async function sendAtCmd(cmd: string, waitSecs = 3): Promise<string> {
+  const port = await detectAtPort()
+  if (!port) return 'ERROR: 无AT端口'
+  const shellCmd = `cat ${port} & PID=$!; sleep 0.5; printf '${cmd}\\x0d' > ${port}; sleep ${waitSecs}; kill $PID 2>/dev/null`
+  const r = await execLocalCmd(shellCmd, waitSecs + 5)
+  return (r.data || '').trim()
+}
+
+async function refreshSimStatus() {
+  simRefreshing.value = true
+  try {
+    const r = await execLocalCmd(
+      "curl -s 'http://127.0.0.1/api/goform/goform_get_cmd_process?isTest=false&cmd=network_type,network_provider_fullname' 2>/dev/null",
+      8
+    )
+    const raw = (r.data || '').trim()
+    try {
+      const d = JSON.parse(raw)
+      const nt = d.network_type
+      const np = d.network_provider_fullname || '未知'
+      const netMap: Record<string, string> = {
+        '0': '无网络', '7': 'LTE', '13': 'LTE', '15': 'TD-LTE',
+        '16': 'NR SA', '17': 'NR NSA', '19': 'NR', '20': 'NSA', '21': 'SA'
+      }
+      const desc = netMap[String(nt)] || (nt ? `类型${nt}` : '未知')
+      simNetInfo.value = `当前: ${np} | ${desc}`
+    } catch {
+      simNetInfo.value = '读取失败，可能非中兴固件'
+    }
+  } catch (e: any) {
+    simNetInfo.value = '读取失败: ' + (e.message || e)
+  } finally {
+    simRefreshing.value = false
+  }
+}
+
+async function switchSim(pin: string, name: string) {
+  simSwitching.value = true
+  simSwitchingTo.value = name
+  simLog.value = `正在切换到${name}...\n`
+  try {
+    // 检查 root
+    const rootChk = await execLocalCmd('id -u', 3)
+    if ((rootChk.data || '').trim() !== '0') {
+      simLog.value += 'ERROR: 需要 root 权限\n'
+      ElMessage.error('需要 root 权限')
+      return
+    }
+
+    // 检测当前网络
+    simLog.value += '检测当前网络...\n'
+    const netR = await execLocalCmd(
+      "curl -s 'http://127.0.0.1/api/goform/goform_get_cmd_process?isTest=false&cmd=network_provider_fullname' 2>/dev/null",
+      8
+    )
+    try {
+      const d = JSON.parse((netR.data || '').trim())
+      const cur = String(d.network_provider_fullname || '').toUpperCase()
+      const isTarget = (name === '移动' && (cur.includes('MOBILE') || cur.includes('移动'))) ||
+                       (name === '联通' && (cur.includes('UNICOM') || cur.includes('联通'))) ||
+                       (name === '电信' && (cur.includes('TELECOM') || cur.includes('电信')))
+      if (isTarget) {
+        simLog.value += `当前已是${name}网络，无需切换\n`
+        ElMessage.info(`当前已是${name}网络`)
+        return
+      }
+    } catch { /* 忽略 */ }
+
+    // 执行 AT+CLCK 切卡
+    simLog.value += `发送 AT+CLCK="SC",1,"${pin}"...\n`
+    const atResp = await sendAtCmd(`AT+CLCK="SC",1,"${pin}"`, 3)
+    simLog.value += `AT 响应: ${atResp}\n`
+
+    const ok = atResp.includes('OK') || atResp.includes('+CLCK:')
+    if (!ok) {
+      simLog.value += '切卡失败\n'
+      ElMessage.error(`切换${name}失败`)
+      return
+    }
+
+    ElMessage.success(`已切换到${name}，等待 SIM 就绪...`)
+
+    // 等待 SIM 就绪
+    simLog.value += '等待 SIM 就绪...\n'
+    const port = await detectAtPort()
+    if (port) {
+      for (let i = 0; i < 8; i++) {
+        const cpin = await sendAtCmd('AT+CPIN?', 1)
+        if (cpin.includes('+CPIN: READY')) {
+          simLog.value += 'SIM 已就绪\n'
+          break
+        }
+        await new Promise(r => setTimeout(r, 2000))
+      }
+    }
+
+    // 等待网络恢复
+    simLog.value += '等待网络恢复...\n'
+    for (let i = 0; i < 15; i++) {
+      const nr = await execLocalCmd(
+        "curl -s 'http://127.0.0.1/api/goform/goform_get_cmd_process?isTest=false&cmd=network_type' 2>/dev/null",
+        5
+      )
+      try {
+        const d = JSON.parse((nr.data || '').trim())
+        if (d.network_type && d.network_type !== '0') {
+          simLog.value += `网络已恢复 (类型: ${d.network_type})\n`
+          break
+        }
+      } catch { /* */ }
+      await new Promise(r => setTimeout(r, 3000))
+    }
+
+    // 后台校准时间
+    simLog.value += '开始校准系统时间...\n'
+    const timeScript = [
+      'for i in 1 2 3; do',
+      '  curl -sI --connect-timeout 5 http://www.baidu.com 2>/dev/null | grep -i "^date:" | head -1 | sed "s/^[^:]*:[[:space:]]*//; s/[[:space:]]*GMT.*//" > /tmp/ts_date.txt',
+      '  D=$(cat /tmp/ts_date.txt 2>/dev/null)',
+      '  [ -n "$D" ] && { EPOCH=$(date -u -D "%a, %d %b %Y %H:%M:%S" -d "$D" +%s 2>/dev/null); [ -n "$EPOCH" ] && [ "$EPOCH" -gt 1700000000 ] && date -u -s @"$EPOCH" >/dev/null 2>&1 && echo "time_synced" && break; }',
+      '  sleep 3',
+      'done',
+    ].join('\n')
+    const tr = await execLocalCmd(timeScript, 30)
+    if ((tr.data || '').includes('time_synced')) {
+      simLog.value += '时间校准成功\n'
+    } else {
+      simLog.value += '时间校准失败（可使用修复时间功能手动校准）\n'
+    }
+
+    simLog.value += '切卡完成\n'
+    ElMessage.success(`切换${name}完成`)
+    await refreshSimStatus()
+
+    // 启动 30 秒冷却
+    simCdSec.value = 30
+    if (simCdTimer) clearInterval(simCdTimer)
+    simCdTimer = setInterval(() => {
+      simCdSec.value--
+      if (simCdSec.value <= 0) {
+        simCdSec.value = 0
+        if (simCdTimer) { clearInterval(simCdTimer); simCdTimer = null }
+      }
+    }, 1000)
+  } catch (e: any) {
+    simLog.value += '异常: ' + (e.message || e) + '\n'
+    ElMessage.error('切卡异常')
+  } finally {
+    simSwitching.value = false
+    simSwitchingTo.value = ''
+  }
+}
+
 const mmActiveTab = ref('overview')
 const mmLoadingStatus = ref(false)
 const mmControlling = ref('')
@@ -5274,6 +5505,7 @@ onUnmounted(() => {
   stopMmAllPolls();
   stopLocalSpeedTest();
   stopDeviceRfRefresh();
+  if (simCdTimer) clearInterval(simCdTimer);
   if (mmGateClickTimer) {
     clearTimeout(mmGateClickTimer);
     mmGateClickTimer = null;
@@ -7764,6 +7996,50 @@ onUnmounted(() => {
   line-height: 1.7;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   padding-top: 10px;
+}
+
+/* ============== SIM 切卡弹窗样式 ============== */
+.sim-netinfo {
+  font-size: 13px;
+  color: #7CFC00;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  text-align: center;
+  font-family: 'JetBrains Mono', monospace;
+}
+.sim-warning {
+  font-size: 11px;
+  color: rgba(255, 153, 153, 0.85);
+  background: rgba(255, 70, 70, 0.08);
+  border: 1px solid rgba(255, 90, 90, 0.2);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  line-height: 1.7;
+}
+.sim-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.sim-log {
+  display: block;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  padding: 10px 12px;
+  margin-top: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #9f9;
 }
 
 /* ============== Tailscale 弹窗样式 ============== */

@@ -3781,19 +3781,18 @@ async function loadWifiSettings() {
     // G5 Pro 外的开发环境可能没有 ubus，这里保持静默。
   }
 
-  // 读取 MLO / Band Steering / 波束成形状态
-  try {
-    const ubusR = await execLocalCmd(
-      `ubus call uci get '{"config":"zwrt_wireless","section":"zte_mbb"}' 2>/dev/null`,
-      5
-    )
-    // ubus 返回的是 JSON-RPC 数组格式: [{"result":[0,{"values":{...}}]}]
-    const arr = JSON.parse((ubusR.data || '').trim())
-    const vals = arr?.[0]?.result?.[1]?.values || {}
-    wifiForm.mlo = vals.mlo === '1'
-    wifiForm.lbd = vals.lbd === '1'
-    wifiForm.beamforming = vals.beamforming === '1'
-  } catch { /* ignore */ }
+  // 读取 MLO / Band Steering / 波束成形状态（直接从已轮询的 wifiStatus 获取）
+  if (wifiStatus.value?.mlo_enable !== undefined) {
+    wifiForm.mlo = wifiStatus.value.mlo_enable === '1'
+  }
+  if (wifiStatus.value?.lbd_enable !== undefined) {
+    wifiForm.lbd = wifiStatus.value.lbd_enable === '1'
+  }
+  if (wifiStatus.value?.beamforming !== undefined) {
+    wifiForm.beamforming = wifiStatus.value.beamforming === '1'
+  } else if (wifiStatus.value?.wifi_beamform_enable !== undefined) {
+    wifiForm.beamforming = wifiStatus.value.wifi_beamform_enable === '1'
+  }
 }
 
 async function applyWifiPerformance() {
@@ -4976,18 +4975,20 @@ async function switchSim(pin: string, name: string) {
     // 从设备 JS 文件中提取 AES 密钥
     simLog.value += '获取加密密钥...\n'
     const keyR = await execLocalCmd(
-      `grep -roPh '[0-9a-fA-F]{32}' /usr/www/ /var/www/ 2>/dev/null | grep -v '00000000' | sort -u | head -30`,
+      `cat /usr/www/js/common_service_rpc.js 2>/dev/null | grep -oE '[0-9a-fA-F]{32}' | sort -u; ` +
+      `cat /usr/www/js/service_rpc.js 2>/dev/null | grep -oE '[0-9a-fA-F]{32}' | sort -u; ` +
+      `find /usr/www /var/www -name '*.js' -exec grep -l 'CryptoJS' {} \\; 2>/dev/null | head -5`,
       8
     )
-    // 找 32 位 hex 字符串（不带引号的）
     const allKeys = (keyR.data || '').trim().split('\n').filter(k => /^[0-9a-fA-F]{32}$/.test(k))
-    // 也搜索带引号的
+    // 也尝试通过 strings 搜索二进制文件
     const keyR2 = await execLocalCmd(
-      `grep -roPh '"[0-9a-fA-F]{32}"' /usr/www/ /var/www/ 2>/dev/null | tr -d '"' | sort -u | head -20`,
-      5
+      `strings /usr/www/js/common_service_rpc.js 2>/dev/null | grep -oE '[0-9a-fA-F]{32}' | sort -u; ` +
+      `strings /usr/www/js/service_rpc.js 2>/dev/null | grep -oE '[0-9a-fA-F]{32}' | sort -u; ` +
+      `grep -oE 'Hex\\.parse\\("[0-9a-fA-F]{32}"\\)' /usr/www/js/*.js 2>/dev/null | grep -oE '[0-9a-fA-F]{32}' | sort -u`,
+      8
     )
     const allKeys2 = (keyR2.data || '').trim().split('\n').filter(k => /^[0-9a-fA-F]{32}$/.test(k))
-    // 合并去重
     const keySet = new Set([...allKeys, ...allKeys2])
     const candidateKeys = [...keySet]
     simLog.value += `找到 ${candidateKeys.length} 个候选密钥\n`

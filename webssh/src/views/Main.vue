@@ -4784,6 +4784,24 @@ async function sendAtCmd(cmd: string, waitSecs = 3): Promise<string> {
 async function refreshSimStatus() {
   simRefreshing.value = true
   try {
+    // 优先通过 ubus 获取 SIM 信息（中兴 G5Pro 的原生接口）
+    const ubusR = await execLocalCmd(
+      `ubus call zwrt_zte_mdm.api get_sim_info '{}' 2>/dev/null || echo "ubus_fail"`,
+      5
+    )
+    try {
+      const d = JSON.parse((ubusR.data || '').trim())
+      if (d.sim_states || d.Operator || d.sim_iccid) {
+        const states = d.sim_states || '未知'
+        const op = d.Operator || '未知'
+        const iccid = d.sim_iccid || ''
+        const pinSt = d.pin_status === '1' ? ' | PIN锁定' : ''
+        simNetInfo.value = `运营商: ${op} | SIM: ${states}${pinSt} | ICCID: ${iccid.slice(-4)}`
+        return
+      }
+    } catch { /* ubus 失败，降级到 goform */ }
+
+    // 降级：通过 goform 获取
     const r = await execLocalCmd(
       "curl -s 'http://127.0.0.1/api/goform/goform_get_cmd_process?isTest=false&cmd=network_type,network_provider_fullname' 2>/dev/null",
       8
@@ -4800,7 +4818,7 @@ async function refreshSimStatus() {
       const desc = netMap[String(nt)] || (nt ? `类型${nt}` : '未知')
       simNetInfo.value = `当前: ${np} | ${desc}`
     } catch {
-      simNetInfo.value = '读取失败，可能非中兴固件'
+      simNetInfo.value = '读取失败'
     }
   } catch (e: any) {
     simNetInfo.value = '读取失败: ' + (e.message || e)
@@ -4872,6 +4890,19 @@ async function switchSim(pin: string, name: string) {
     // 等待网络恢复
     simLog.value += '等待网络恢复...\n'
     for (let i = 0; i < 15; i++) {
+      // 优先用 ubus 检测
+      const ur = await execLocalCmd(
+        `ubus call zwrt_zte_mdm.api get_sim_info '{}' 2>/dev/null`,
+        5
+      )
+      try {
+        const d = JSON.parse((ur.data || '').trim())
+        if (d.sim_states === 'sim ready' && d.Operator) {
+          simLog.value += `网络已恢复 (${d.Operator}, ICCID末四位: ${(d.sim_iccid || '').slice(-4)})\n`
+          break
+        }
+      } catch { /* ubus 失败，降级 */ }
+      // 降级用 goform
       const nr = await execLocalCmd(
         "curl -s 'http://127.0.0.1/api/goform/goform_get_cmd_process?isTest=false&cmd=network_type' 2>/dev/null",
         5

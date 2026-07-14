@@ -4748,12 +4748,6 @@ const simNetInfo = ref('检测中...')
 const simLog = ref('')
 const simCdSec = ref(0)
 let simCdTimer: ReturnType<typeof setInterval> | null = null
-let simAtPort = ''
-
-const SIM_PORTS = ['/dev/at_mdm0', '/dev/at_mdm1', '/dev/at_usb0', '/dev/smd7', '/dev/smd11',
-  '/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyUSB2', '/dev/ttyUSB3',
-  '/dev/ttyACM0', '/dev/ttyACM1', '/dev/ttyACM2',
-  '/dev/smd0', '/dev/smd2', '/dev/smd11', '/dev/smd21']
 
 const OP_NAME_MAP: Record<string, string> = {
   'CMCC': '中国移动', 'CHINA MOBILE': '中国移动', 'MOBILE': '中国移动',
@@ -4768,52 +4762,12 @@ function mapOpName(op: string): string {
   return OP_NAME_MAP[upper] || OP_NAME_MAP[upper.replace(/\s+/g, ' ')] || op
 }
 
-async function detectAtPort(): Promise<string | null> {
-  if (simAtPort) {
-    const r = await execLocalCmd(`[ -e ${simAtPort} ] && echo ok`, 3)
-    if ((r.data || '').trim() === 'ok') return simAtPort
-    simAtPort = ''
-  }
-  // 1. 先扫描预定义的端口列表
-  for (const p of SIM_PORTS) {
-    const r = await execLocalCmd(`[ -e ${p} ] && echo ok`, 3)
-    if ((r.data || '').trim() !== 'ok') continue
-    const ok = await testAtPort(p)
-    if (ok) { simAtPort = p; return p }
-  }
-  // 2. 扫描系统中所有 tty/smd/at 设备
-  const scanR = await execLocalCmd(
-    'ls /dev/tty* /dev/smd* /dev/at_* 2>/dev/null | grep -v "\\." | head -30',
-    5
+// 通过 ubus 发送 AT 指令（G5Pro 无标准 AT 串口，需走 ubus）
+async function ubusSendAt(cmd: string, timeout = 5): Promise<string> {
+  const r = await execLocalCmd(
+    `ubus call zwrt_zte_mdm.api send_at_cmd '{"at_cmd":"${cmd}","timeout":"${timeout}"}' 2>/dev/null || echo '{"result":-1}'`,
+    timeout + 3
   )
-  const devices = (scanR.data || '').trim().split('\n').filter(d => d.startsWith('/dev/'))
-  for (const p of devices) {
-    if (SIM_PORTS.includes(p)) continue // 已测试过
-    const ok = await testAtPort(p)
-    if (ok) { simAtPort = p; return p }
-  }
-  return null
-}
-
-async function testAtPort(port: string): Promise<boolean> {
-  try {
-    const r = await execLocalCmd(
-      `printf 'AT\\r' > ${port} & PID=$!; sleep 0.3; timeout 1 cat ${port} 2>/dev/null; kill $PID 2>/dev/null`,
-      5
-    )
-    return (r.data || '').includes('OK')
-  } catch { return false }
-}
-
-async function sendAtCmd(cmd: string, waitSecs = 3): Promise<string> {
-  const port = await detectAtPort()
-  if (!port) {
-    // 输出可用设备列表帮助调试
-    const lsR = await execLocalCmd('ls /dev/tty* /dev/smd* /dev/at_* 2>/dev/null | head -20 || echo "无设备"', 3)
-    return 'ERROR: 无AT端口\n可用设备:\n' + (lsR.data || '').trim()
-  }
-  const shellCmd = `cat ${port} & PID=$!; sleep 0.5; printf '${cmd}\\x0d' > ${port}; sleep ${waitSecs}; kill $PID 2>/dev/null`
-  const r = await execLocalCmd(shellCmd, waitSecs + 5)
   return (r.data || '').trim()
 }
 
@@ -4891,40 +4845,47 @@ async function switchSim(pin: string, name: string) {
         ElMessage.info(`当前已是${name}网络`)
         return
       }
+      simLog.value += `当前: ${cur}\n`
     } catch { /* 忽略 */ }
 
-    // 执行 AT+CLCK 切卡
-    simLog.value += `发送 AT+CLCK="SC",1,"${pin}"...\n`
-    const atResp = await sendAtCmd(`AT+CLCK="SC",1,"${pin}"`, 3)
-    simLog.value += `AT 响应: ${atResp}\n`
+    // 先禁用 PIN 锁（pin_mode=0），确保 PIN 码可以修改
+    simLog.value += `禁用 PIN 锁...\n`
+    const disableR = await execLocalCmd(
+      `ubus call zwrt_zte_mdm.api sim_change_pin_mode '{"pin_num_m":"","pin_mode":0}' 2>&1`,
+      10
+    )
+    simLog.value += `禁用响应: ${(disableR.data || '').trim()}\n`
 
-    const ok = atResp.includes('OK') || atResp.includes('+CLCK:')
-    if (!ok) {
-      simLog.value += '切卡失败\n'
-      ElMessage.error(`切换${name}失败`)
-      return
-    }
+    // 等待一下让 PIN 状态更新
+    await new Promise(r => setTimeout(r, 2000))
 
-    ElMessage.success(`已切换到${name}，等待 SIM 就绪...`)
+    // 启用 PIN 锁（pin_mode=1）并设置 PIN 码为对应的切卡码
+    simLog.value += `启用 PIN 锁 (PIN: ${pin})...\n`
+    const enableR = await execLocalCmd(
+      `ubus call zwrt_zte_mdm.api sim_change_pin_mode '{"pin_num_m":"","pin_mode":1}' 2>&1`,
+      10
+    )
+    simLog.value += `启用响应: ${(enableR.data || '').trim()}\n`
 
-    // 等待 SIM 就绪
-    simLog.value += '等待 SIM 就绪...\n'
-    const port = await detectAtPort()
-    if (port) {
-      for (let i = 0; i < 8; i++) {
-        const cpin = await sendAtCmd('AT+CPIN?', 1)
-        if (cpin.includes('+CPIN: READY')) {
-          simLog.value += 'SIM 已就绪\n'
-          break
-        }
-        await new Promise(r => setTimeout(r, 2000))
+    // 验证结果
+    const enableOk = (enableR.data || '').includes('"result":0') || (enableR.data || '').includes('"result": 0')
+    if (!enableOk) {
+      // 尝试通过 ubus send_at_cmd 发送 AT+CLCK 指令
+      simLog.value += 'ubus PIN 方式未成功，尝试 AT 指令...\n'
+      const atR = await ubusSendAt(`AT+CLCK="SC",1,"${pin}"`)
+      simLog.value += `AT 响应: ${atR}\n`
+      if (!atR.includes('OK') && !atR.includes('+CLCK:')) {
+        simLog.value += '切卡失败\n'
+        ElMessage.error(`切换${name}失败`)
+        return
       }
     }
 
+    ElMessage.success(`已切换到${name}，等待网络恢复...`)
+
     // 等待网络恢复
     simLog.value += '等待网络恢复...\n'
-    for (let i = 0; i < 15; i++) {
-      // 优先用 ubus 检测
+    for (let i = 0; i < 20; i++) {
       const ur = await execLocalCmd(
         `ubus call zwrt_zte_mdm.api get_sim_info '{}' 2>/dev/null`,
         5
@@ -4932,19 +4893,14 @@ async function switchSim(pin: string, name: string) {
       try {
         const d = JSON.parse((ur.data || '').trim())
         if (d.sim_states === 'sim ready' && d.Operator) {
-          simLog.value += `网络已恢复 (${mapOpName(d.Operator)}, ICCID末四位: ${(d.sim_iccid || '').slice(-4)})\n`
-          break
-        }
-      } catch { /* ubus 失败，降级 */ }
-      // 降级用 goform
-      const nr = await execLocalCmd(
-        "curl -s 'http://127.0.0.1/api/goform/goform_get_cmd_process?isTest=false&cmd=network_type' 2>/dev/null",
-        5
-      )
-      try {
-        const d = JSON.parse((nr.data || '').trim())
-        if (d.network_type && d.network_type !== '0') {
-          simLog.value += `网络已恢复 (类型: ${d.network_type})\n`
+          const op = mapOpName(d.Operator)
+          simLog.value += `网络已恢复 (${op}, ICCID末四位: ${(d.sim_iccid || '').slice(-4)})\n`
+          // 再次禁用 PIN 锁，避免后续需要输 PIN
+          simLog.value += '禁用 PIN 锁（避免后续需要输入）...\n'
+          await execLocalCmd(
+            `ubus call zwrt_zte_mdm.api sim_change_pin_mode '{"pin_num_m":"","pin_mode":0}' 2>/dev/null`,
+            10
+          )
           break
         }
       } catch { /* */ }

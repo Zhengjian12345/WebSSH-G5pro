@@ -4972,68 +4972,59 @@ async function switchSim(pin: string, name: string) {
       simLog.value += `当前: ${cur}\n`
     } catch { /* 忽略 */ }
 
-    // 从设备 JS 文件中提取 AES 密钥
-    simLog.value += '获取加密密钥...\n'
-    const keyR = await execLocalCmd(
-      `cat /usr/www/js/common_service_rpc.js 2>/dev/null | grep -oE '[0-9a-fA-F]{32}' | sort -u; ` +
-      `cat /usr/www/js/service_rpc.js 2>/dev/null | grep -oE '[0-9a-fA-F]{32}' | sort -u; ` +
-      `find /usr/www /var/www -name '*.js' -exec grep -l 'CryptoJS' {} \\; 2>/dev/null | head -5`,
-      8
+    // 关键步骤：设置 PIN 无需解码（飞猫 APP 同款流程）
+    simLog.value += '设置 PIN 明文模式...\n'
+    const decodeR = await execLocalCmd(
+      `ubus call zwrt_zte_mdm.api zwrt_mdm_uci_set '{"option":"pin_no_need_decode","value":"1"}' 2>&1`,
+      5
     )
-    const allKeys = (keyR.data || '').trim().split('\n').filter(k => /^[0-9a-fA-F]{32}$/.test(k))
-    // 也尝试通过 strings 搜索二进制文件
-    const keyR2 = await execLocalCmd(
-      `strings /usr/www/js/common_service_rpc.js 2>/dev/null | grep -oE '[0-9a-fA-F]{32}' | sort -u; ` +
-      `strings /usr/www/js/service_rpc.js 2>/dev/null | grep -oE '[0-9a-fA-F]{32}' | sort -u; ` +
-      `grep -oE 'Hex\\.parse\\("[0-9a-fA-F]{32}"\\)' /usr/www/js/*.js 2>/dev/null | grep -oE '[0-9a-fA-F]{32}' | sort -u`,
-      8
-    )
-    const allKeys2 = (keyR2.data || '').trim().split('\n').filter(k => /^[0-9a-fA-F]{32}$/.test(k))
-    const keySet = new Set([...allKeys, ...allKeys2])
-    const candidateKeys = [...keySet]
-    simLog.value += `找到 ${candidateKeys.length} 个候选密钥\n`
-
-    // AES-CBC 加密 PIN 码并尝试切卡（遍历候选密钥）
-    // 抓包格式：pin_num_m = "m" + base64(IV + ciphertext)
-    // 32 字节 base64 解码 = 16 字节 IV + 16 字节密文（PKCS7 填充）
-    let switchOk = false
-    for (const aesKey of candidateKeys) {
-      const encR = await execLocalCmd(
-        `PIN='${pin}'; KEY='${aesKey}'; ` +
-        `IV=$(dd if=/dev/urandom bs=16 count=1 2>/dev/null | xxd -p | tr -d '\\n'); ` +
-        `ENC=$(echo -n "$PIN" | openssl enc -aes-128-cbc -K "$KEY" -iv "$IV" 2>/dev/null | xxd -p | tr -d '\\n'); ` +
-        `echo "m${IV}${ENC}"`,
-        5
-      )
-      const encryptedPin = (encR.data || '').trim()
-      if (!encryptedPin.startsWith('m') || encryptedPin.length < 20) continue
-
-      simLog.value += `尝试密钥 ${aesKey.slice(0, 8)}... → ${encryptedPin.slice(0, 12)}...\n`
-      const enableR = await execLocalCmd(
-        `ubus call zwrt_zte_mdm.api sim_change_pin_mode '{"pin_num_m":"${encryptedPin}","pin_mode":1}' 2>&1`,
-        10
-      )
-      const resp = (enableR.data || '').trim()
-      simLog.value += `响应: ${resp}\n`
-
-      if (resp.includes('"result":0') || resp.includes('"result": 0')) {
-        simLog.value += '切卡成功！\n'
-        switchOk = true
-        break
-      }
+    simLog.value += `响应: ${(decodeR.data || '').trim()}\n`
+    if ((decodeR.data || '').includes('error') || (decodeR.data || '').includes('-1')) {
+      simLog.value += 'PIN 明文模式设置失败，将尝试加密方式\n'
     }
 
+    // 执行切卡：sim_change_pin_mode + PIN 明文（飞猫 APP 方式）
+    simLog.value += `发送切卡指令 (PIN: ${pin})...\n`
+    const enableR = await execLocalCmd(
+      `ubus call zwrt_zte_mdm.api sim_change_pin_mode '{"pin_num_m":"${pin}","pin_mode":1}' 2>&1`,
+      10
+    )
+    const resp = (enableR.data || '').trim()
+    simLog.value += `响应: ${resp}\n`
+
+    let switchOk = (resp.includes('"result":0') || resp.includes('"result": 0'))
+
+    // 如果明文方式失败，尝试 AES 加密方式（官方 Web 后台方式）
     if (!switchOk) {
-      simLog.value += '所有密钥尝试均失败，尝试 AT 备用方案...\n'
-      // 备用：尝试多种 ubus AT 方法名
-      const atMethods = [
-        `ubus call zwrt_zte_mdm.api send_at_cmd '{"at_cmd":"AT+CLCK=\\"SC\\",1,\\"${pin}\\"","timeout":"5"}' 2>&1`,
-        `ubus call zwrt_zte_mdm.api at_cmd '{"cmd":"AT+CLCK=\\"SC\\",1,\\"${pin}\\""}' 2>&1`,
-      ]
-      for (const m of atMethods) {
-        const r = await execLocalCmd(m, 10)
-        simLog.value += `AT响应: ${(r.data || '').trim()}\n`
-        if ((r.data || '').includes('OK') || (r.data || '').includes('"result":0')) {
+      simLog.value += '明文方式失败，尝试 AES 加密...\n'
+      const keyR = await execLocalCmd(
+        `cat /usr/www/js/common_service_rpc.js 2>/dev/null | grep -oE '[0-9a-fA-F]{32}' | sort -u; ` +
+        `cat /usr/www/js/service_rpc.js 2>/dev/null | grep -oE '[0-9a-fA-F]{32}' | sort -u; ` +
+        `grep -oE 'Hex\\.parse\\("[0-9a-fA-F]{32}"\\)' /usr/www/js/*.js 2>/dev/null | grep -oE '[0-9a-fA-F]{32}' | sort -u`,
+        8
+      )
+      const allKeys = (keyR.data || '').trim().split('\n').filter(k => /^[0-9a-fA-F]{32}$/.test(k))
+      const keySet = new Set([...allKeys])
+      simLog.value += `找到 ${keySet.size} 个候选密钥\n`
+
+      for (const aesKey of keySet) {
+        const encR = await execLocalCmd(
+          `PIN='${pin}'; KEY='${aesKey}'; ` +
+          `IV=$(dd if=/dev/urandom bs=16 count=1 2>/dev/null | xxd -p | tr -d '\\n'); ` +
+          `ENC=$(echo -n "$PIN" | openssl enc -aes-128-cbc -K "$KEY" -iv "$IV" 2>/dev/null | xxd -p | tr -d '\\n'); ` +
+          `echo "m${IV}${ENC}"`,
+          5
+        )
+        const encryptedPin = (encR.data || '').trim()
+        if (!encryptedPin.startsWith('m') || encryptedPin.length < 20) continue
+
+        simLog.value += `尝试密钥 ${aesKey.slice(0, 8)}...\n`
+        const r2 = await execLocalCmd(
+          `ubus call zwrt_zte_mdm.api sim_change_pin_mode '{"pin_num_m":"${encryptedPin}","pin_mode":1}' 2>&1`,
+          10
+        )
+        if ((r2.data || '').includes('"result":0') || (r2.data || '').includes('"result": 0')) {
+          simLog.value += '切卡成功！\n'
           switchOk = true
           break
         }
@@ -5041,6 +5032,7 @@ async function switchSim(pin: string, name: string) {
     }
 
     if (!switchOk) {
+      simLog.value += '切卡失败\n'
       ElMessage.error(`切换${name}失败`)
       return
     }

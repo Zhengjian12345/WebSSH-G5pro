@@ -4973,35 +4973,75 @@ async function switchSim(pin: string, name: string) {
       simLog.value += `当前: ${cur}\n`
     } catch { /* 忽略 */ }
 
-    // 先禁用 PIN 锁（pin_mode=0），确保 PIN 码可以修改
-    simLog.value += `禁用 PIN 锁...\n`
-    const disableR = await execLocalCmd(
-      `ubus call zwrt_zte_mdm.api sim_change_pin_mode '{"pin_num_m":"","pin_mode":0}' 2>&1`,
-      10
+    // 从设备 JS 文件中提取 AES 密钥
+    simLog.value += '获取加密密钥...\n'
+    const keyR = await execLocalCmd(
+      `grep -roPh '"[0-9a-f]{32}"' /usr/www/ /var/www/ 2>/dev/null | head -20`,
+      5
     )
-    simLog.value += `禁用响应: ${(disableR.data || '').trim()}\n`
+    const keyMatch = (keyR.data || '').match(/"([0-9a-f]{32})"/)
+    const aesKey = keyMatch ? keyMatch[1] : ''
+    if (!aesKey) {
+      simLog.value += '未找到 AES 密钥，尝试备用方案...\n'
+    } else {
+      simLog.value += `密钥: ${aesKey.slice(0, 8)}...\n`
+    }
 
-    // 等待一下让 PIN 状态更新
-    await new Promise(r => setTimeout(r, 2000))
+    // AES-CBC 加密 PIN 码（使用 openssl）
+    let encryptedPin = ''
+    if (aesKey) {
+      const encR = await execLocalCmd(
+        `PIN='${pin}'; KEY='${aesKey}'; IV=$(openssl rand -hex 8); ` +
+        `ENC=$(echo -n "$PIN" | openssl enc -aes-128-cbc -K "$KEY" -iv "$IV" -nopad 2>/dev/null | xxd -p | tr -d '\\n'); ` +
+        `echo "m${ENC}"`,
+        5
+      )
+      encryptedPin = (encR.data || '').trim()
+      if (encryptedPin.startsWith('m') && encryptedPin.length > 10) {
+        simLog.value += `PIN 加密成功: ${encryptedPin.slice(0, 16)}...\n`
+      } else {
+        encryptedPin = ''
+        simLog.value += 'PIN 加密失败，将尝试直接传明文\n'
+      }
+    }
 
-    // 启用 PIN 锁（pin_mode=1）并设置 PIN 码为对应的切卡码
-    simLog.value += `启用 PIN 锁 (PIN: ${pin})...\n`
-    const enableR = await execLocalCmd(
-      `ubus call zwrt_zte_mdm.api sim_change_pin_mode '{"pin_num_m":"","pin_mode":1}' 2>&1`,
-      10
-    )
-    simLog.value += `启用响应: ${(enableR.data || '').trim()}\n`
+    // 方案1: 通过 ubus sim_change_pin_mode 切卡
+    if (encryptedPin) {
+      simLog.value += '发送启用 PIN 锁请求...\n'
+      const enableR = await execLocalCmd(
+        `ubus call zwrt_zte_mdm.api sim_change_pin_mode '{"pin_num_m":"${encryptedPin}","pin_mode":1}' 2>&1`,
+        10
+      )
+      simLog.value += `响应: ${(enableR.data || '').trim()}\n`
+      const ok1 = (enableR.data || '').includes('"result":0') || (enableR.data || '').includes('"result": 0')
+      if (ok1) {
+        simLog.value += '切卡指令已发送\n'
+      } else {
+        encryptedPin = '' // 标记失败，尝试下一个方案
+      }
+    }
 
-    // 验证结果
-    const enableOk = (enableR.data || '').includes('"result":0') || (enableR.data || '').includes('"result": 0')
-    if (!enableOk) {
-      // 尝试通过 ubus send_at_cmd 发送 AT+CLCK 指令
-      simLog.value += 'ubus PIN 方式未成功，尝试 AT 指令...\n'
-      const atR = await ubusSendAt(`AT+CLCK="SC",1,"${pin}"`)
-      simLog.value += `AT 响应: ${atR}\n`
-      if (!atR.includes('OK') && !atR.includes('+CLCK:')) {
-        simLog.value += '切卡失败\n'
-        ElMessage.error(`切换${name}失败`)
+    // 方案2: 尝试 ubus send_at_cmd 发送 AT+CLCK
+    if (!encryptedPin) {
+      simLog.value += '尝试 AT+CLCK 指令...\n'
+      // 尝试多种 ubus 方法名
+      const atMethods = [
+        `ubus call zwrt_zte_mdm.api send_at_cmd '{"at_cmd":"AT+CLCK=\\"SC\\",1,\\"${pin}\\"","timeout":"5"}' 2>&1`,
+        `ubus call zwrt_zte_mdm.api at_cmd '{"cmd":"AT+CLCK=\\"SC\\",1,\\"${pin}\\""}' 2>&1`,
+        `ubus call zwrt_zte_mdm.api exec_at_cmd '{"at_cmd":"AT+CLCK=\\"SC\\",1,\\"${pin}\\""}' 2>&1`,
+      ]
+      let atOk = false
+      for (const m of atMethods) {
+        const r = await execLocalCmd(m, 10)
+        simLog.value += `响应: ${(r.data || '').trim()}\n`
+        if ((r.data || '').includes('OK') || (r.data || '').includes('"result":0')) {
+          atOk = true
+          break
+        }
+      }
+      if (!atOk) {
+        simLog.value += 'AT 指令方式也失败\n'
+        ElMessage.error(`切换${name}失败，所有方案均不可用`)
         return
       }
     }
@@ -5011,6 +5051,7 @@ async function switchSim(pin: string, name: string) {
     // 等待网络恢复
     simLog.value += '等待网络恢复...\n'
     for (let i = 0; i < 20; i++) {
+      await new Promise(r => setTimeout(r, 3000))
       const ur = await execLocalCmd(
         `ubus call zwrt_zte_mdm.api get_sim_info '{}' 2>/dev/null`,
         5
@@ -5020,20 +5061,13 @@ async function switchSim(pin: string, name: string) {
         if (d.sim_states === 'sim ready' && d.Operator) {
           const op = mapOpName(d.Operator)
           simLog.value += `网络已恢复 (${op}, ICCID末四位: ${(d.sim_iccid || '').slice(-4)})\n`
-          // 再次禁用 PIN 锁，避免后续需要输 PIN
-          simLog.value += '禁用 PIN 锁（避免后续需要输入）...\n'
-          await execLocalCmd(
-            `ubus call zwrt_zte_mdm.api sim_change_pin_mode '{"pin_num_m":"","pin_mode":0}' 2>/dev/null`,
-            10
-          )
           break
         }
       } catch { /* */ }
-      await new Promise(r => setTimeout(r, 3000))
     }
 
     // 后台校准时间
-    simLog.value += '开始校准系统时间...\n'
+    simLog.value += '校准系统时间...\n'
     const timeScript = [
       'for i in 1 2 3; do',
       '  curl -sI --connect-timeout 5 http://www.baidu.com 2>/dev/null | grep -i "^date:" | head -1 | sed "s/^[^:]*:[[:space:]]*//; s/[[:space:]]*GMT.*//" > /tmp/ts_date.txt',
@@ -5046,14 +5080,14 @@ async function switchSim(pin: string, name: string) {
     if ((tr.data || '').includes('time_synced')) {
       simLog.value += '时间校准成功\n'
     } else {
-      simLog.value += '时间校准失败（可使用修复时间功能手动校准）\n'
+      simLog.value += '时间校准失败\n'
     }
 
     simLog.value += '切卡完成\n'
     ElMessage.success(`切换${name}完成`)
     await refreshSimStatus()
 
-    // 启动 30 秒冷却
+    // 30 秒冷却
     simCdSec.value = 30
     if (simCdTimer) clearInterval(simCdTimer)
     simCdTimer = setInterval(() => {

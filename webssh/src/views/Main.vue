@@ -4750,7 +4750,23 @@ const simCdSec = ref(0)
 let simCdTimer: ReturnType<typeof setInterval> | null = null
 let simAtPort = ''
 
-const SIM_PORTS = ['/dev/at_mdm0', '/dev/at_mdm1', '/dev/at_usb0', '/dev/smd7', '/dev/smd11']
+const SIM_PORTS = ['/dev/at_mdm0', '/dev/at_mdm1', '/dev/at_usb0', '/dev/smd7', '/dev/smd11',
+  '/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyUSB2', '/dev/ttyUSB3',
+  '/dev/ttyACM0', '/dev/ttyACM1', '/dev/ttyACM2',
+  '/dev/smd0', '/dev/smd2', '/dev/smd11', '/dev/smd21']
+
+const OP_NAME_MAP: Record<string, string> = {
+  'CMCC': '中国移动', 'CHINA MOBILE': '中国移动', 'MOBILE': '中国移动',
+  'CUCC': '中国联通', 'CHINA UNICOM': '中国联通', 'UNICOM': '中国联通',
+  'CT': '中国电信', 'CHINA TELECOM': '中国电信', 'TELECOM': '中国电信',
+  'CBN': '中国广电', 'CHINA BROADCAST': '中国广电', 'BROADCAST': '中国广电',
+  'CM': '中国移动', 'CU': '中国联通', 'CTCC': '中国电信',
+}
+function mapOpName(op: string): string {
+  if (!op) return '未知'
+  const upper = op.toUpperCase().trim()
+  return OP_NAME_MAP[upper] || OP_NAME_MAP[upper.replace(/\s+/g, ' ')] || op
+}
 
 async function detectAtPort(): Promise<string | null> {
   if (simAtPort) {
@@ -4758,24 +4774,44 @@ async function detectAtPort(): Promise<string | null> {
     if ((r.data || '').trim() === 'ok') return simAtPort
     simAtPort = ''
   }
+  // 1. 先扫描预定义的端口列表
   for (const p of SIM_PORTS) {
     const r = await execLocalCmd(`[ -e ${p} ] && echo ok`, 3)
     if ((r.data || '').trim() !== 'ok') continue
-    const test = await execLocalCmd(
-      `cat ${p} & PID=$!; sleep 0.5; printf 'AT\\x0d' > ${p}; sleep 1; kill $PID 2>/dev/null`,
-      8
-    )
-    if ((test.data || '').includes('OK')) {
-      simAtPort = p
-      return p
-    }
+    const ok = await testAtPort(p)
+    if (ok) { simAtPort = p; return p }
+  }
+  // 2. 扫描系统中所有 tty/smd/at 设备
+  const scanR = await execLocalCmd(
+    'ls /dev/tty* /dev/smd* /dev/at_* 2>/dev/null | grep -v "\\." | head -30',
+    5
+  )
+  const devices = (scanR.data || '').trim().split('\n').filter(d => d.startsWith('/dev/'))
+  for (const p of devices) {
+    if (SIM_PORTS.includes(p)) continue // 已测试过
+    const ok = await testAtPort(p)
+    if (ok) { simAtPort = p; return p }
   }
   return null
 }
 
+async function testAtPort(port: string): Promise<boolean> {
+  try {
+    const r = await execLocalCmd(
+      `printf 'AT\\r' > ${port} & PID=$!; sleep 0.3; timeout 1 cat ${port} 2>/dev/null; kill $PID 2>/dev/null`,
+      5
+    )
+    return (r.data || '').includes('OK')
+  } catch { return false }
+}
+
 async function sendAtCmd(cmd: string, waitSecs = 3): Promise<string> {
   const port = await detectAtPort()
-  if (!port) return 'ERROR: 无AT端口'
+  if (!port) {
+    // 输出可用设备列表帮助调试
+    const lsR = await execLocalCmd('ls /dev/tty* /dev/smd* /dev/at_* 2>/dev/null | head -20 || echo "无设备"', 3)
+    return 'ERROR: 无AT端口\n可用设备:\n' + (lsR.data || '').trim()
+  }
   const shellCmd = `cat ${port} & PID=$!; sleep 0.5; printf '${cmd}\\x0d' > ${port}; sleep ${waitSecs}; kill $PID 2>/dev/null`
   const r = await execLocalCmd(shellCmd, waitSecs + 5)
   return (r.data || '').trim()
@@ -4793,7 +4829,7 @@ async function refreshSimStatus() {
       const d = JSON.parse((ubusR.data || '').trim())
       if (d.sim_states || d.Operator || d.sim_iccid) {
         const states = d.sim_states || '未知'
-        const op = d.Operator || '未知'
+        const op = mapOpName(d.Operator)
         const iccid = d.sim_iccid || ''
         const pinSt = d.pin_status === '1' ? ' | PIN锁定' : ''
         simNetInfo.value = `运营商: ${op} | SIM: ${states}${pinSt} | ICCID: ${iccid.slice(-4)}`
@@ -4810,7 +4846,7 @@ async function refreshSimStatus() {
     try {
       const d = JSON.parse(raw)
       const nt = d.network_type
-      const np = d.network_provider_fullname || '未知'
+      const np = mapOpName(d.network_provider_fullname)
       const netMap: Record<string, string> = {
         '0': '无网络', '7': 'LTE', '13': 'LTE', '15': 'TD-LTE',
         '16': 'NR SA', '17': 'NR NSA', '19': 'NR', '20': 'NSA', '21': 'SA'
@@ -4840,18 +4876,16 @@ async function switchSim(pin: string, name: string) {
       return
     }
 
-    // 检测当前网络
+    // 检测当前网络（优先 ubus）
     simLog.value += '检测当前网络...\n'
     const netR = await execLocalCmd(
-      "curl -s 'http://127.0.0.1/api/goform/goform_get_cmd_process?isTest=false&cmd=network_provider_fullname' 2>/dev/null",
-      8
+      `ubus call zwrt_zte_mdm.api get_sim_info '{}' 2>/dev/null || echo "{}"`,
+      5
     )
     try {
       const d = JSON.parse((netR.data || '').trim())
-      const cur = String(d.network_provider_fullname || '').toUpperCase()
-      const isTarget = (name === '移动' && (cur.includes('MOBILE') || cur.includes('移动'))) ||
-                       (name === '联通' && (cur.includes('UNICOM') || cur.includes('联通'))) ||
-                       (name === '电信' && (cur.includes('TELECOM') || cur.includes('电信')))
+      const cur = mapOpName(d.Operator || '')
+      const isTarget = cur.includes(name)
       if (isTarget) {
         simLog.value += `当前已是${name}网络，无需切换\n`
         ElMessage.info(`当前已是${name}网络`)
@@ -4898,7 +4932,7 @@ async function switchSim(pin: string, name: string) {
       try {
         const d = JSON.parse((ur.data || '').trim())
         if (d.sim_states === 'sim ready' && d.Operator) {
-          simLog.value += `网络已恢复 (${d.Operator}, ICCID末四位: ${(d.sim_iccid || '').slice(-4)})\n`
+          simLog.value += `网络已恢复 (${mapOpName(d.Operator)}, ICCID末四位: ${(d.sim_iccid || '').slice(-4)})\n`
           break
         }
       } catch { /* ubus 失败，降级 */ }

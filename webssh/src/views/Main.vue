@@ -1450,7 +1450,7 @@
           </div>
         </section>
       </div>
-      <section v-if="false" class="settings-section">
+      <section v-if="true" class="settings-section">
         <div class="wifi-tuning-grid">
           <div class="wifi-tuning-item">
             <div class="settings-title-row">
@@ -1502,6 +1502,57 @@
             <el-input v-model="wifiForm.country" maxlength="2" placeholder="CN" />
             <div class="settings-actions wifi-setting-actions">
               <el-button size="small" type="primary" :loading="wifiSettingsSaving === 'country'" @click="applyWifiCountrySetting">应用</el-button>
+            </div>
+          </div>
+          <div class="wifi-tuning-item">
+            <div class="settings-title-row">
+              <span class="settings-section-title">MLO 多链路聚合</span>
+              <el-tooltip
+                content="Wi-Fi 7 MLO 技术，可同时使用多个频段传输，提升速度和稳定性。开启后 2.4G 加密需为 SAE 模式。"
+                placement="top">
+                <span class="settings-help-icon">!</span>
+              </el-tooltip>
+            </div>
+            <el-switch
+              v-model="wifiForm.mlo"
+              active-text="开启"
+              inactive-text="关闭" />
+            <div class="settings-actions wifi-setting-actions">
+              <el-button size="small" type="primary" :loading="wifiSettingsSaving === 'mlo'" @click="applyWifiMloSetting">应用</el-button>
+            </div>
+          </div>
+          <div class="wifi-tuning-item">
+            <div class="settings-title-row">
+              <span class="settings-section-title">Band Steering 频段引导</span>
+              <el-tooltip
+                content="自动引导支持 5G 的设备连接 5G 频段，提升整体网络体验。"
+                placement="top">
+                <span class="settings-help-icon">!</span>
+              </el-tooltip>
+            </div>
+            <el-switch
+              v-model="wifiForm.lbd"
+              active-text="开启"
+              inactive-text="关闭" />
+            <div class="settings-actions wifi-setting-actions">
+              <el-button size="small" type="primary" :loading="wifiSettingsSaving === 'lbd'" @click="applyWifiLbdSetting">应用</el-button>
+            </div>
+          </div>
+          <div class="wifi-tuning-item">
+            <div class="settings-title-row">
+              <span class="settings-section-title">波束成形</span>
+              <el-tooltip
+                content="波束成形技术，定向增强信号强度，提升远距离和穿墙性能。"
+                placement="top">
+                <span class="settings-help-icon">!</span>
+              </el-tooltip>
+            </div>
+            <el-switch
+              v-model="wifiForm.beamforming"
+              active-text="开启"
+              inactive-text="关闭" />
+            <div class="settings-actions wifi-setting-actions">
+              <el-button size="small" type="primary" :loading="wifiSettingsSaving === 'beamforming'" @click="applyWifiBeamformingSetting">应用</el-button>
             </div>
           </div>
         </div>
@@ -2274,7 +2325,7 @@ const wifiTxPowerOptions = [
 ];
 
 type NetworkApplyTarget = '' | 'mode' | 'lteBand' | 'nrBand' | 'lteCell' | 'nrCell';
-type WifiApplyTarget = '' | 'radio24' | 'radio5' | 'psm' | 'txpower' | 'country' | 'thermal' | 'settings' | 'all';
+type WifiApplyTarget = '' | 'radio24' | 'radio5' | 'psm' | 'txpower' | 'country' | 'thermal' | 'settings' | 'all' | 'mlo' | 'lbd' | 'beamforming';
 
 interface DeviceSettings {
   wifi24_enabled?: boolean;
@@ -2312,6 +2363,9 @@ const wifiForm = reactive({
   txpower: 100,
   country: '',
   thermal_disabled: false,
+  mlo: false,
+  lbd: true,
+  beamforming: true,
 });
 
 function normalizeWifiTxPower(value: unknown): number {
@@ -3726,6 +3780,20 @@ async function loadWifiSettings() {
   } catch {
     // G5 Pro 外的开发环境可能没有 ubus，这里保持静默。
   }
+
+  // 读取 MLO / Band Steering / 波束成形状态
+  try {
+    const ubusR = await execLocalCmd(
+      `ubus call uci get '{"config":"zwrt_wireless","section":"zte_mbb"}' 2>/dev/null`,
+      5
+    )
+    // ubus 返回的是 JSON-RPC 数组格式: [{"result":[0,{"values":{...}}]}]
+    const arr = JSON.parse((ubusR.data || '').trim())
+    const vals = arr?.[0]?.result?.[1]?.values || {}
+    wifiForm.mlo = vals.mlo === '1'
+    wifiForm.lbd = vals.lbd === '1'
+    wifiForm.beamforming = vals.beamforming === '1'
+  } catch { /* ignore */ }
 }
 
 async function applyWifiPerformance() {
@@ -3871,6 +3939,63 @@ async function applyWifiCountrySetting() {
     ElMessage.error(err.message || '国家码应用失败');
   } finally {
     wifiSettingsSaving.value = '';
+  }
+}
+
+async function applyWifiMloSetting() {
+  wifiSettingsSaving.value = 'mlo'
+  try {
+    const r = await execLocalCmd(
+      `ubus call zwrt_wlan set '{"zte_mbb":{"mlo":"${wifiForm.mlo ? '1' : '0'}"}}' 2>&1`,
+      10
+    )
+    if ((r.data || '').includes('"result":0') || (r.data || '').includes('"result": 0')) {
+      ElMessage.success(wifiForm.mlo ? 'MLO 已开启' : 'MLO 已关闭')
+    } else {
+      ElMessage.error('MLO 设置失败: ' + (r.data || '').trim())
+    }
+  } catch (e: any) {
+    ElMessage.error('MLO 设置失败: ' + (e.message || e))
+  } finally {
+    wifiSettingsSaving.value = ''
+  }
+}
+
+async function applyWifiLbdSetting() {
+  wifiSettingsSaving.value = 'lbd'
+  try {
+    const r = await execLocalCmd(
+      `ubus call zwrt_wlan set '{"zte_mbb":{"lbd":"${wifiForm.lbd ? '1' : '0'}"}}' 2>&1`,
+      10
+    )
+    if ((r.data || '').includes('"result":0') || (r.data || '').includes('"result": 0')) {
+      ElMessage.success(wifiForm.lbd ? 'Band Steering 已开启' : 'Band Steering 已关闭')
+    } else {
+      ElMessage.error('Band Steering 设置失败: ' + (r.data || '').trim())
+    }
+  } catch (e: any) {
+    ElMessage.error('Band Steering 设置失败: ' + (e.message || e))
+  } finally {
+    wifiSettingsSaving.value = ''
+  }
+}
+
+async function applyWifiBeamformingSetting() {
+  wifiSettingsSaving.value = 'beamforming'
+  try {
+    const r = await execLocalCmd(
+      `ubus call zwrt_wlan set '{"zte_mbb":{"beamforming":"${wifiForm.beamforming ? '1' : '0'}"}}' 2>&1`,
+      10
+    )
+    if ((r.data || '').includes('"result":0') || (r.data || '').includes('"result": 0')) {
+      ElMessage.success(wifiForm.beamforming ? '波束成形已开启' : '波束成形已关闭')
+    } else {
+      ElMessage.error('波束成形设置失败: ' + (r.data || '').trim())
+    }
+  } catch (e: any) {
+    ElMessage.error('波束成形设置失败: ' + (e.message || e))
+  } finally {
+    wifiSettingsSaving.value = ''
   }
 }
 

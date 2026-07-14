@@ -4976,74 +4976,72 @@ async function switchSim(pin: string, name: string) {
     // 从设备 JS 文件中提取 AES 密钥
     simLog.value += '获取加密密钥...\n'
     const keyR = await execLocalCmd(
-      `grep -roPh '"[0-9a-f]{32}"' /usr/www/ /var/www/ 2>/dev/null | head -20`,
+      `grep -roPh '[0-9a-fA-F]{32}' /usr/www/ /var/www/ 2>/dev/null | grep -v '00000000' | sort -u | head -30`,
+      8
+    )
+    // 找 32 位 hex 字符串（不带引号的）
+    const allKeys = (keyR.data || '').trim().split('\n').filter(k => /^[0-9a-fA-F]{32}$/.test(k))
+    // 也搜索带引号的
+    const keyR2 = await execLocalCmd(
+      `grep -roPh '"[0-9a-fA-F]{32}"' /usr/www/ /var/www/ 2>/dev/null | tr -d '"' | sort -u | head -20`,
       5
     )
-    const keyMatch = (keyR.data || '').match(/"([0-9a-f]{32})"/)
-    const aesKey = keyMatch ? keyMatch[1] : ''
-    if (!aesKey) {
-      simLog.value += '未找到 AES 密钥，尝试备用方案...\n'
-    } else {
-      simLog.value += `密钥: ${aesKey.slice(0, 8)}...\n`
-    }
+    const allKeys2 = (keyR2.data || '').trim().split('\n').filter(k => /^[0-9a-fA-F]{32}$/.test(k))
+    // 合并去重
+    const keySet = new Set([...allKeys, ...allKeys2])
+    const candidateKeys = [...keySet]
+    simLog.value += `找到 ${candidateKeys.length} 个候选密钥\n`
 
-    // AES-CBC 加密 PIN 码（使用 openssl）
-    let encryptedPin = ''
-    if (aesKey) {
+    // AES-CBC 加密 PIN 码并尝试切卡（遍历候选密钥）
+    // 抓包格式：pin_num_m = "m" + base64(IV + ciphertext)
+    // 32 字节 base64 解码 = 16 字节 IV + 16 字节密文（PKCS7 填充）
+    let switchOk = false
+    for (const aesKey of candidateKeys) {
       const encR = await execLocalCmd(
-        `PIN='${pin}'; KEY='${aesKey}'; IV=$(openssl rand -hex 8); ` +
-        `ENC=$(echo -n "$PIN" | openssl enc -aes-128-cbc -K "$KEY" -iv "$IV" -nopad 2>/dev/null | xxd -p | tr -d '\\n'); ` +
-        `echo "m${ENC}"`,
+        `PIN='${pin}'; KEY='${aesKey}'; ` +
+        `IV=$(dd if=/dev/urandom bs=16 count=1 2>/dev/null | xxd -p | tr -d '\\n'); ` +
+        `ENC=$(echo -n "$PIN" | openssl enc -aes-128-cbc -K "$KEY" -iv "$IV" 2>/dev/null | xxd -p | tr -d '\\n'); ` +
+        `echo "m${IV}${ENC}"`,
         5
       )
-      encryptedPin = (encR.data || '').trim()
-      if (encryptedPin.startsWith('m') && encryptedPin.length > 10) {
-        simLog.value += `PIN 加密成功: ${encryptedPin.slice(0, 16)}...\n`
-      } else {
-        encryptedPin = ''
-        simLog.value += 'PIN 加密失败，将尝试直接传明文\n'
-      }
-    }
+      const encryptedPin = (encR.data || '').trim()
+      if (!encryptedPin.startsWith('m') || encryptedPin.length < 20) continue
 
-    // 方案1: 通过 ubus sim_change_pin_mode 切卡
-    if (encryptedPin) {
-      simLog.value += '发送启用 PIN 锁请求...\n'
+      simLog.value += `尝试密钥 ${aesKey.slice(0, 8)}... → ${encryptedPin.slice(0, 12)}...\n`
       const enableR = await execLocalCmd(
         `ubus call zwrt_zte_mdm.api sim_change_pin_mode '{"pin_num_m":"${encryptedPin}","pin_mode":1}' 2>&1`,
         10
       )
-      simLog.value += `响应: ${(enableR.data || '').trim()}\n`
-      const ok1 = (enableR.data || '').includes('"result":0') || (enableR.data || '').includes('"result": 0')
-      if (ok1) {
-        simLog.value += '切卡指令已发送\n'
-      } else {
-        encryptedPin = '' // 标记失败，尝试下一个方案
+      const resp = (enableR.data || '').trim()
+      simLog.value += `响应: ${resp}\n`
+
+      if (resp.includes('"result":0') || resp.includes('"result": 0')) {
+        simLog.value += '切卡成功！\n'
+        switchOk = true
+        break
       }
     }
 
-    // 方案2: 尝试 ubus send_at_cmd 发送 AT+CLCK
-    if (!encryptedPin) {
-      simLog.value += '尝试 AT+CLCK 指令...\n'
-      // 尝试多种 ubus 方法名
+    if (!switchOk) {
+      simLog.value += '所有密钥尝试均失败，尝试 AT 备用方案...\n'
+      // 备用：尝试多种 ubus AT 方法名
       const atMethods = [
         `ubus call zwrt_zte_mdm.api send_at_cmd '{"at_cmd":"AT+CLCK=\\"SC\\",1,\\"${pin}\\"","timeout":"5"}' 2>&1`,
         `ubus call zwrt_zte_mdm.api at_cmd '{"cmd":"AT+CLCK=\\"SC\\",1,\\"${pin}\\""}' 2>&1`,
-        `ubus call zwrt_zte_mdm.api exec_at_cmd '{"at_cmd":"AT+CLCK=\\"SC\\",1,\\"${pin}\\""}' 2>&1`,
       ]
-      let atOk = false
       for (const m of atMethods) {
         const r = await execLocalCmd(m, 10)
-        simLog.value += `响应: ${(r.data || '').trim()}\n`
+        simLog.value += `AT响应: ${(r.data || '').trim()}\n`
         if ((r.data || '').includes('OK') || (r.data || '').includes('"result":0')) {
-          atOk = true
+          switchOk = true
           break
         }
       }
-      if (!atOk) {
-        simLog.value += 'AT 指令方式也失败\n'
-        ElMessage.error(`切换${name}失败，所有方案均不可用`)
-        return
-      }
+    }
+
+    if (!switchOk) {
+      ElMessage.error(`切换${name}失败`)
+      return
     }
 
     ElMessage.success(`已切换到${name}，等待网络恢复...`)

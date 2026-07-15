@@ -1058,6 +1058,8 @@ func main() {
 		auth.POST("/api/tailscale/autostart", service.TailscaleSetAutostartHandler)
 		auth.GET("/api/tailscale/check-update", service.TailscaleCheckUpdateHandler)
 		auth.POST("/api/tailscale/install", service.TailscaleInstallHandler)
+		auth.GET("/api/tailscale/install/progress", service.TailscaleInstallProgressHandler)
+		auth.POST("/api/tailscale/install/cancel", service.TailscaleCancelInstallHandler)
 		auth.POST("/api/tailscale/uninstall", service.TailscaleUninstallHandler)
 	}
 

@@ -1941,6 +1941,10 @@
             </div>
           </div>
         </div>
+        <div v-if="tsInstalling" style="margin-bottom:12px">
+          <el-progress :percentage="tsInstallProgress.percent" :stroke-width="18" :text-inside="true" :status="tsInstallProgress.state === 'done' ? 'success' : tsInstallProgress.state === 'failed' ? 'exception' : undefined" />
+          <p style="margin:6px 0 0;font-size:12px;color:rgba(255,255,255,0.7);">{{ tsInstallProgress.msg }}</p>
+        </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <el-button v-if="!tsStatus.installed" type="primary" :loading="tsInstalling" @click="installTailscale" style="flex:1;">安装</el-button>
           <el-button v-if="tsStatus.installed && tsHasUpdate" type="warning" :loading="tsInstalling" @click="updateTailscale" style="flex:1;">更新到 {{ tsRemoteVersion }}</el-button>
@@ -4649,6 +4653,7 @@ const tsInstalling = ref(false)
 const tsUninstalling = ref(false)
 const tsLog = ref('')
 const tsCheckingUpdate = ref(false)
+const tsInstallProgress = reactive({ state: 'idle', msg: '', percent: 0, stage: '' })
 
 interface TsStatus {
   installed: boolean
@@ -4833,21 +4838,28 @@ async function checkTsUpdate() {
 
 async function installTailscale() {
   tsInstalling.value = true
-  tsLog.value = '开始安装 Tailscale...'
+  tsInstallProgress.state = 'downloading'; tsInstallProgress.percent = 0; tsInstallProgress.msg = '正在准备...'; tsInstallProgress.stage = 'download'
   try {
+    // 发起安装（后台执行）
     const r = await axios.post('/api/tailscale/install', { action: 'install' })
-    if (r.data.code === 0) {
-      tsLog.value = r.data.data.output || ''
-      ElMessage.success('Tailscale 安装成功' + (r.data.data.version ? ` (${r.data.data.version})` : ''))
+    if (r.data.code !== 0) {
+      ElMessage.error(r.data.msg || '启动安装失败')
+      tsInstalling.value = false
+      return
+    }
+    // 监听 SSE 进度
+    await pollTsInstallProgress()
+    if (tsInstallProgress.state === 'done') {
+      ElMessage.success('Tailscale 安装成功')
+      tsLog.value = tsInstallProgress.msg
       await refreshTsStatus()
       await checkTsUpdate()
     } else {
-      tsLog.value = r.data.data?.output || r.data.msg || '安装失败'
-      ElMessage.error(r.data.msg || '安装失败')
+      ElMessage.error(tsInstallProgress.msg || '安装失败')
+      tsLog.value = tsInstallProgress.msg
     }
   } catch (e: any) {
-    tsLog.value = '安装异常: ' + (e.message || e)
-    ElMessage.error('安装失败')
+    ElMessage.error('安装失败: ' + (e.message || e))
   } finally {
     tsInstalling.value = false
   }
@@ -4862,25 +4874,54 @@ async function updateTailscale() {
     )
   } catch { return }
   tsInstalling.value = true
-  tsLog.value = '开始更新 Tailscale...'
+  tsInstallProgress.state = 'downloading'; tsInstallProgress.percent = 0; tsInstallProgress.msg = '正在准备...'; tsInstallProgress.stage = 'download'
   try {
     const r = await axios.post('/api/tailscale/install', { action: 'update' })
-    if (r.data.code === 0) {
-      tsLog.value = r.data.data.output || ''
-      ElMessage.success('Tailscale 更新成功' + (r.data.data.version ? ` (${r.data.data.version})` : ''))
-      tsStatus.version = r.data.data.version || ''
-      tsStatus.running = false
+    if (r.data.code !== 0) {
+      ElMessage.error(r.data.msg || '启动更新失败')
+      tsInstalling.value = false
+      return
+    }
+    await pollTsInstallProgress()
+    if (tsInstallProgress.state === 'done') {
+      ElMessage.success('Tailscale 更新成功')
+      tsLog.value = tsInstallProgress.msg
       tsHasUpdate.value = false
+      await refreshTsStatus()
     } else {
-      tsLog.value = r.data.data?.output || r.data.msg || '更新失败'
-      ElMessage.error(r.data.msg || '更新失败')
+      ElMessage.error(tsInstallProgress.msg || '更新失败')
+      tsLog.value = tsInstallProgress.msg
     }
   } catch (e: any) {
-    tsLog.value = '更新异常: ' + (e.message || e)
-    ElMessage.error('更新失败')
+    ElMessage.error('更新失败: ' + (e.message || e))
   } finally {
     tsInstalling.value = false
   }
+}
+
+async function pollTsInstallProgress() {
+  const evtSource = new EventSource('/api/tailscale/install/progress')
+  await new Promise<void>((resolve) => {
+    evtSource.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data)
+        tsInstallProgress.state = data.state || 'idle'
+        tsInstallProgress.msg = data.msg || ''
+        tsInstallProgress.percent = data.percent ?? 0
+        tsInstallProgress.stage = data.stage || ''
+        if (['done', 'failed', 'canceled', 'idle'].includes(data.state)) {
+          evtSource.close()
+          resolve()
+        }
+      } catch { /* ignore parse errors */ }
+    }
+    evtSource.onerror = () => {
+      evtSource.close()
+      resolve()
+    }
+    // 超时兜底
+    setTimeout(() => { evtSource.close(); resolve() }, 300000)
+  })
 }
 
 async function uninstallTailscale() {

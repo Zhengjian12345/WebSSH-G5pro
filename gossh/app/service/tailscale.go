@@ -2,15 +2,19 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"gossh/gin"
@@ -23,8 +27,40 @@ const (
 	tailscaleAutostartMarker = ".autostart"
 	tailscalePkgBase         = "https://pkgs.tailscale.com/stable"
 	tailscaleDownloadURL     = tailscalePkgBase + "/tailscale_latest_arm64.tgz"
-	tailscaleVersionCheckURL = tailscalePkgBase + "/?mode=json&arch=arm64"
 )
+
+// 内置 gh-proxy 列表（mihomo 未运行时使用）
+var tailscaleProxies = []string{
+	"https://ghfast.top/",
+	"https://gh-proxy.org/",
+	"https://gh-proxy.com/",
+	"https://gh.llkk.cc/",
+	"https://hub.gitmirror.com/",
+}
+
+// ─────────────────────────── 安装进度状态 ───────────────────────────
+
+type TailscaleInstallStatus struct {
+	mu      sync.RWMutex
+	State   string `json:"state"`   // idle / downloading / extracting / installing / done / failed / canceled
+	Msg     string `json:"msg"`     // 人类可读描述
+	Percent int    `json:"percent"` // 0-100
+	Stage   string `json:"stage"`   // download / extract / install
+}
+
+var tsInstallStatus = &TailscaleInstallStatus{State: "idle", Msg: "暂无任务"}
+
+func (s *TailscaleInstallStatus) update(fn func(*TailscaleInstallStatus)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fn(s)
+}
+
+func (s *TailscaleInstallStatus) get() TailscaleInstallStatus {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return *s
+}
 
 // ─────────────────────────── 辅助函数 ───────────────────────────
 
@@ -54,7 +90,6 @@ func getTailscaleLocalVersion() string {
 	if err != nil {
 		return ""
 	}
-	// 输出第一行即版本号，如 "1.78.0" 或 "tailscale v1.78.0"
 	line := strings.TrimSpace(string(out))
 	if idx := strings.Index(line, "\n"); idx >= 0 {
 		line = line[:idx]
@@ -65,10 +100,7 @@ func getTailscaleLocalVersion() string {
 }
 
 // getTailscaleRemoteVersion 从 pkgs.tailscale.com 获取最新稳定版本号。
-// pkgs.tailscale.com 国内可直接访问，无需代理。
 func getTailscaleRemoteVersion() (string, error) {
-	// 方式1: 访问 pkgs.tailscale.com/stable/ 页面，从 HTML 中提取版本号
-	// 版本号出现在文件名中，如 tailscale_1.98.2_arm64.tgz
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tailscalePkgBase+"/", nil)
@@ -86,15 +118,163 @@ func getTailscaleRemoteVersion() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	html := string(body)
-
-	// 匹配 tailscale_1.xx.x_arm64.tgz 或 Tailscale_1.xx.x-1_arm_64.qpkg 中的版本号
 	re := regexp.MustCompile(`tailscale[_-](\d+\.\d+\.\d+)`)
-	matches := re.FindStringSubmatch(html)
+	matches := re.FindStringSubmatch(string(body))
 	if len(matches) >= 2 {
 		return matches[1], nil
 	}
 	return "", fmt.Errorf("无法从 pkgs.tailscale.com 解析最新版本号")
+}
+
+// getMihomoProxyURL 检测 mihomo 是否运行，若运行则返回 HTTP 代理地址（从 config.yaml 解析 mixed-port）。
+func getMihomoProxyURL() string {
+	dir := "/data/kano_plugins/mihomo"
+	configPath := filepath.Join(dir, "config.yaml")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		trim := strings.TrimSpace(line)
+		if strings.HasPrefix(trim, "mixed-port:") {
+			val := strings.TrimSpace(strings.TrimPrefix(trim, "mixed-port:"))
+			port := strings.TrimSpace(val)
+			return "127.0.0.1:" + port
+		}
+	}
+	// 也尝试 port 字段（http 代理端口）
+	for _, line := range strings.Split(string(data), "\n") {
+		trim := strings.TrimSpace(line)
+		if strings.HasPrefix(trim, "port:") {
+			val := strings.TrimSpace(strings.TrimPrefix(trim, "port:"))
+			port := strings.TrimSpace(val)
+			return "127.0.0.1:" + port
+		}
+	}
+	return ""
+}
+
+// buildTailscaleHTTPClient 构建带代理的 HTTP 客户端。
+// 优先使用 mihomo 代理，不可用则直连（pkgs.tailscale.com 国内可直连）。
+func buildTailscaleHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = (&net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext
+	transport.TLSHandshakeTimeout = 10 * time.Second
+	transport.ResponseHeaderTimeout = 15 * time.Second
+	transport.IdleConnTimeout = 60 * time.Second
+
+	proxyURL := getMihomoProxyURL()
+	if proxyURL != "" {
+		// 检查端口是否真的在监听
+		conn, err := net.DialTimeout("tcp", proxyURL, 1*time.Second)
+		if err == nil {
+			conn.Close()
+			parsed, parseErr := url.Parse("http://" + proxyURL)
+			if parseErr == nil {
+				transport.Proxy = http.ProxyURL(parsed)
+				slog.Info("[tailscale] 使用 mihomo 代理下载", "proxy", proxyURL)
+			}
+		}
+	}
+	return &http.Client{Transport: transport, Timeout: 300 * time.Second}
+}
+
+// downloadTailscaleWithProgress 下载 Tailscale tgz 并实时上报进度。
+func downloadTailscaleWithProgress(ctx context.Context, destPath string, onProgress func(downloaded, total int64, msg string)) error {
+	client := buildTailscaleHTTPClient()
+	downloadURL := tailscaleDownloadURL
+
+	// 如果没有使用 mihomo 代理（直连），尝试 gh-proxy 加速
+	proxyURL := getMihomoProxyURL()
+	tryURLs := []string{downloadURL}
+	if proxyURL == "" {
+		for _, proxy := range tailscaleProxies {
+			tryURLs = append(tryURLs, proxy+downloadURL)
+		}
+	}
+
+	var lastErr error
+	for _, u := range tryURLs {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		req.Header.Set("User-Agent", "WebSSH-u60pro-tailscale-installer")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			slog.Warn("[tailscale] 下载失败", "url", u, "err", err)
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			lastErr = fmt.Errorf("HTTP %d from %s", resp.StatusCode, u)
+			slog.Warn("[tailscale] 下载失败", "url", u, "err", lastErr)
+			continue
+		}
+
+		total := resp.ContentLength
+		out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+		if err != nil {
+			resp.Body.Close()
+			return err
+		}
+
+		buf := make([]byte, 64*1024)
+		var downloaded int64
+		var writeErr error
+		for {
+			if ctx.Err() != nil {
+				out.Close()
+				resp.Body.Close()
+				_ = os.Remove(destPath)
+				return ctx.Err()
+			}
+			n, readErr := resp.Body.Read(buf)
+			if n > 0 {
+				written, werr := out.Write(buf[:n])
+				downloaded += int64(written)
+				if onProgress != nil {
+					onProgress(downloaded, total, "正在下载...")
+				}
+				if werr != nil {
+					writeErr = werr
+					break
+				}
+				if written != n {
+					writeErr = io.ErrShortWrite
+					break
+				}
+			}
+			if readErr == io.EOF {
+				break
+			}
+			if readErr != nil {
+				writeErr = readErr
+				break
+			}
+		}
+		resp.Body.Close()
+		out.Close()
+
+		if writeErr != nil {
+			_ = os.Remove(destPath)
+			lastErr = writeErr
+			continue
+		}
+		return nil
+	}
+	return fmt.Errorf("所有下载线路均失败: %w", lastErr)
 }
 
 // ─────────────────────────── 自启动 ───────────────────────────
@@ -115,7 +295,7 @@ func cleanupLegacyTailscaleRcLocal() {
 	skip := 0
 	for _, line := range lines {
 		if strings.Contains(line, marker) {
-			skip = 9 // marker + 最多 9 行内容
+			skip = 9
 			continue
 		}
 		if skip > 0 {
@@ -140,7 +320,6 @@ func InitTailscaleAutostart() {
 			return
 		}
 
-		// 等待网络就绪（最多 60 秒）
 		for i := 0; i < 12; i++ {
 			cmd := exec.Command("ping", "-c", "1", "-W", "2", "223.5.5.5")
 			if err := cmd.Run(); err == nil {
@@ -149,14 +328,12 @@ func InitTailscaleAutostart() {
 			slog.Info("tailscale autostart: waiting for network", "attempt", i+1)
 		}
 
-		// 创建 TUN 设备
 		if _, err := os.Stat("/dev/net/tun"); err != nil {
 			_ = os.MkdirAll("/dev/net", 0755)
 			_ = exec.Command("mknod", "/dev/net/tun", "c", "10", "200").Run()
 			_ = os.Chmod("/dev/net/tun", 0600)
 		}
 
-		// 启动 tailscaled
 		logPath := filepath.Join(tailscaleDir, "tailscaled.log")
 		pidPath := filepath.Join(tailscaleDir, "tailscaled.pid")
 		cmd := exec.Command(
@@ -215,10 +392,9 @@ func TailscaleSetAutostartHandler(c *gin.Context) {
 	c.JSON(200, gin.H{"code": 0, "msg": "ok", "data": gin.H{"enabled": req.Enabled}})
 }
 
-// ─────────────────────────── Handlers: 版本检查 & 安装/更新 ───────────────────────────
+// ─────────────────────────── Handlers: 版本检查 ───────────────────────────
 
 // TailscaleCheckUpdateHandler GET /api/tailscale/check-update
-// 检查 Tailscale 是否有新版本可用。
 func TailscaleCheckUpdateHandler(c *gin.Context) {
 	localVersion := getTailscaleLocalVersion()
 	binExists := localVersion != ""
@@ -227,34 +403,24 @@ func TailscaleCheckUpdateHandler(c *gin.Context) {
 	if err != nil {
 		slog.Warn("[tailscale] 检查远程版本失败", "err", err)
 		c.JSON(200, gin.H{
-			"code": 1,
-			"msg":  "获取最新版本失败: " + err.Error(),
-			"data": gin.H{
-				"installed":      binExists,
-				"local_version":  localVersion,
-				"remote_version": "",
-				"has_update":     false,
-			},
+			"code": 1, "msg": "获取最新版本失败: " + err.Error(),
+			"data": gin.H{"installed": binExists, "local_version": localVersion, "remote_version": "", "has_update": false},
 		})
 		return
 	}
 
 	hasUpdate := !binExists || (localVersion != "" && remoteVersion != "" && localVersion != remoteVersion)
-
 	c.JSON(200, gin.H{
 		"code": 0, "msg": "ok",
-		"data": gin.H{
-			"installed":      binExists,
-			"local_version":  localVersion,
-			"remote_version": remoteVersion,
-			"has_update":     hasUpdate,
-		},
+		"data": gin.H{"installed": binExists, "local_version": localVersion, "remote_version": remoteVersion, "has_update": hasUpdate},
 	})
 }
 
+// ─────────────────────────── Handlers: 安装/更新（带进度） ───────────────────────────
+
 // TailscaleInstallHandler POST /api/tailscale/install
 // {"action": "install" | "update"}
-// 下载并安装/更新 Tailscale。pkgs.tailscale.com 国内可直接访问。
+// 在后台执行安装，通过 SSE 推送进度。
 func TailscaleInstallHandler(c *gin.Context) {
 	var req struct {
 		Action string `json:"action" binding:"required"`
@@ -268,66 +434,214 @@ func TailscaleInstallHandler(c *gin.Context) {
 		return
 	}
 
-	// 确定目标版本号
-	remoteVersion := ""
-	if req.Action == "update" {
-		v, err := getTailscaleRemoteVersion()
-		if err != nil {
-			c.JSON(200, gin.H{"code": 1, "msg": "获取最新版本失败: " + err.Error()})
-			return
-		}
-		remoteVersion = v
-	}
-
-	// 执行安装脚本
-	dir := tailscaleDir
-	binDir := filepath.Join(dir, "bin")
-	script := fmt.Sprintf(`
-DIR="%s"
-BIN_DIR="%s"
-mkdir -p "$DIR" "$BIN_DIR"
-echo "下载 Tailscale..."
-curl -fsSL --connect-timeout 15 "%s" -o /tmp/tailscale.tgz 2>&1 || { echo "下载失败"; exit 1; }
-echo "解压..."
-tar -xzf /tmp/tailscale.tgz -C /tmp/ 2>&1
-cp /tmp/tailscale_*/tailscale "$BIN_DIR/" 2>&1
-cp /tmp/tailscale_*/tailscaled "$BIN_DIR/" 2>&1
-chmod +x "$BIN_DIR/tailscale" "$BIN_DIR/tailscaled"
-"$BIN_DIR/tailscale" version 2>/dev/null | head -n 1
-rm -rf /tmp/tailscale.tgz /tmp/tailscale_*
-echo "安装完成"
-`, dir, binDir, tailscaleDownloadURL)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", script)
-	out, err := cmd.CombinedOutput()
-	output := strings.TrimSpace(string(out))
-
-	if err != nil {
-		slog.Warn("[tailscale] 安装/更新失败", "action", req.Action, "err", err, "output", output)
-		c.JSON(200, gin.H{"code": 1, "msg": "安装失败", "data": gin.H{"output": output}})
+	current := tsInstallStatus.get()
+	if current.State == "downloading" || current.State == "extracting" || current.State == "installing" {
+		c.JSON(200, gin.H{"code": 1, "msg": "安装任务正在进行中"})
 		return
 	}
 
-	// 获取安装后的版本
-	newVersion := getTailscaleLocalVersion()
+	// 后台执行安装
+	go doTailscaleInstall(req.Action)
 
-	slog.Info("[tailscale] 安装/更新成功", "action", req.Action, "version", newVersion)
-	c.JSON(200, gin.H{
-		"code": 0,
-		"msg":  "ok",
-		"data": gin.H{
-			"version":        newVersion,
-			"remote_version": remoteVersion,
-			"output":         output,
-		},
+	c.JSON(200, gin.H{"code": 0, "msg": "已开始"})
+}
+
+// doTailscaleInstall 后台执行 Tailscale 安装/更新，实时更新 tsInstallStatus。
+func doTailscaleInstall(action string) {
+	proxyURL := getMihomoProxyURL()
+	useMihomo := proxyURL != ""
+
+	tsInstallStatus.update(func(s *TailscaleInstallStatus) {
+		s.State = "downloading"
+		s.Percent = 0
+		s.Stage = "download"
+		if useMihomo {
+			s.Msg = "正在通过 mihomo 代理下载..."
+		} else {
+			s.Msg = "正在下载 Tailscale..."
+		}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// 下载
+	tmpDir, err := os.MkdirTemp("", "ts-install-*")
+	if err != nil {
+		tsInstallStatus.update(func(s *TailscaleInstallStatus) {
+			s.State = "failed"; s.Msg = "创建临时目录失败: " + err.Error()
+		})
+		return
+	}
+	defer os.RemoveAll(tmpDir)
+
+	archivePath := filepath.Join(tmpDir, "tailscale.tgz")
+	err = downloadTailscaleWithProgress(ctx, archivePath, func(downloaded, total int64, msg string) {
+		pct := 0
+		if total > 0 {
+			pct = int(downloaded * 100 / total)
+			if pct > 100 {
+				pct = 100
+			}
+		}
+		sizeStr := fmt.Sprintf("%.1f MB / %.1f MB", float64(downloaded)/1024/1024, float64(total)/1024/1024)
+		if total <= 0 {
+			sizeStr = fmt.Sprintf("%.1f MB", float64(downloaded)/1024/1024)
+		}
+		proxyHint := ""
+		if useMihomo {
+			proxyHint = "[mihomo] "
+		}
+		tsInstallStatus.update(func(s *TailscaleInstallStatus) {
+			s.Percent = pct
+			s.Msg = proxyHint + sizeStr
+		})
+	})
+
+	if err != nil {
+		if ctx.Err() != nil {
+			tsInstallStatus.update(func(s *TailscaleInstallStatus) { s.State = "canceled"; s.Msg = "已取消" })
+		} else {
+			tsInstallStatus.update(func(s *TailscaleInstallStatus) { s.State = "failed"; s.Msg = "下载失败: " + err.Error() })
+		}
+		return
+	}
+
+	// 验证文件
+	info, err := os.Stat(archivePath)
+	if err != nil || info.Size() == 0 {
+		tsInstallStatus.update(func(s *TailscaleInstallStatus) { s.State = "failed"; s.Msg = "下载文件为空" })
+		return
+	}
+
+	// 解压
+	tsInstallStatus.update(func(s *TailscaleInstallStatus) { s.State = "extracting"; s.Msg = "正在解压..."; s.Percent = 75; s.Stage = "extract" })
+	extractDir := filepath.Join(tmpDir, "extract")
+	if err := os.MkdirAll(extractDir, 0755); err != nil {
+		tsInstallStatus.update(func(s *TailscaleInstallStatus) { s.State = "failed"; s.Msg = "创建解压目录失败" })
+		return
+	}
+	cmd := exec.CommandContext(ctx, "tar", "-xzf", archivePath, "-C", extractDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		tsInstallStatus.update(func(s *TailscaleInstallStatus) { s.State = "failed"; s.Msg = "解压失败: " + strings.TrimSpace(string(out)) })
+		return
+	}
+
+	// 查找二进制
+	var tsBinPath, tsdBinPath string
+	entries, _ := os.ReadDir(extractDir)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			c1 := filepath.Join(extractDir, entry.Name(), "tailscale")
+			c2 := filepath.Join(extractDir, entry.Name(), "tailscaled")
+			if _, e1 := os.Stat(c1); e1 == nil {
+				tsBinPath = c1
+			}
+			if _, e2 := os.Stat(c2); e2 == nil {
+				tsdBinPath = c2
+			}
+		}
+	}
+	if tsBinPath == "" {
+		c1 := filepath.Join(extractDir, "tailscale")
+		if _, e := os.Stat(c1); e == nil {
+			tsBinPath = c1
+		}
+	}
+	if tsdBinPath == "" {
+		c2 := filepath.Join(extractDir, "tailscaled")
+		if _, e := os.Stat(c2); e == nil {
+			tsdBinPath = c2
+		}
+	}
+	if tsBinPath == "" || tsdBinPath == "" {
+		tsInstallStatus.update(func(s *TailscaleInstallStatus) { s.State = "failed"; s.Msg = "解压后未找到 tailscale/tailscaled 二进制" })
+		return
+	}
+
+	// 安装
+	tsInstallStatus.update(func(s *TailscaleInstallStatus) { s.State = "installing"; s.Msg = "正在安装..."; s.Percent = 90; s.Stage = "install" })
+	binDir := filepath.Join(tailscaleDir, "bin")
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		tsInstallStatus.update(func(s *TailscaleInstallStatus) { s.State = "failed"; s.Msg = "创建目录失败" })
+		return
+	}
+
+	for _, src := range []string{tsBinPath, tsdBinPath} {
+		dst := filepath.Join(binDir, filepath.Base(src))
+		if err := copyFile(src, dst); err != nil {
+			tsInstallStatus.update(func(s *TailscaleInstallStatus) { s.State = "failed"; s.Msg = "复制文件失败: " + err.Error() })
+			return
+		}
+		if err := os.Chmod(dst, 0755); err != nil {
+			tsInstallStatus.update(func(s *TailscaleInstallStatus) { s.State = "failed"; s.Msg = "设置权限失败" })
+			return
+		}
+	}
+
+	newVersion := getTailscaleLocalVersion()
+	slog.Info("[tailscale] 安装/更新成功", "action", action, "version", newVersion)
+	tsInstallStatus.update(func(s *TailscaleInstallStatus) {
+		s.State = "done"
+		s.Percent = 100
+		s.Msg = "安装完成 (" + newVersion + ")"
+		s.Stage = "done"
 	})
 }
 
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
+}
+
+// TailscaleInstallProgressHandler GET /api/tailscale/install/progress
+// SSE 流式推送安装进度。
+func TailscaleInstallProgressHandler(c *gin.Context) {
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+
+	c.Stream(func(w io.Writer) bool {
+		status := tsInstallStatus.get()
+		data, _ := json.Marshal(status)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		c.Writer.Flush()
+
+		// 如果任务已完成或空闲，关闭流
+		if status.State == "done" || status.State == "failed" || status.State == "canceled" || status.State == "idle" {
+			return false
+		}
+		time.Sleep 500 * time.Millisecond
+		return true
+	})
+}
+
+// TailscaleCancelInstallHandler POST /api/tailscale/install/cancel
+func TailscaleCancelInstallHandler(c *gin.Context) {
+	tsInstallStatus.update(func(s *TailscaleInstallStatus) {
+		if s.State == "downloading" || s.State == "extracting" || s.State == "installing" {
+			s.State = "canceled"
+			s.Msg = "正在取消..."
+		}
+	})
+	c.JSON(200, gin.H{"code": 0, "msg": "ok"})
+}
+
+// ─────────────────────────── Handlers: 卸载 ───────────────────────────
+
 // TailscaleUninstallHandler POST /api/tailscale/uninstall
 func TailscaleUninstallHandler(c *gin.Context) {
-	// 先停止运行中的 tailscaled
 	pidFile := filepath.Join(tailscaleDir, "tailscaled.pid")
 	if data, err := os.ReadFile(pidFile); err == nil {
 		pid := strings.TrimSpace(string(data))
@@ -338,14 +652,11 @@ func TailscaleUninstallHandler(c *gin.Context) {
 		}
 	}
 
-	// 删除整个目录
 	if err := os.RemoveAll(tailscaleDir); err != nil {
 		c.JSON(200, gin.H{"code": 1, "msg": "删除失败: " + err.Error()})
 		return
 	}
 
-	// 清理自启动标记（冗余保护）
 	cleanupLegacyTailscaleRcLocal()
-
 	c.JSON(200, gin.H{"code": 0, "msg": "已卸载 Tailscale"})
 }

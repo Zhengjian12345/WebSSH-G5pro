@@ -1676,7 +1676,7 @@
         </div>
       </el-tab-pane>
 
-      <el-tab-pane v-if="false" label="短信转发" name="sms">
+      <el-tab-pane label="短信转发" name="sms">
         <div class="system-tool-panel">
           <div class="settings-section-title">短信转发</div>
           <div class="sms-forward-grid">
@@ -1684,6 +1684,7 @@
               <div class="system-tool-section-title">Bark</div>
               <el-switch v-model="smsForward.barkEnabled" active-text="启用" inactive-text="关闭" />
               <el-input v-model="smsForward.barkUrl" placeholder="https://api.day.app/你的Key?icon=https://..." clearable />
+              <el-input v-model="smsForward.barkGroup" placeholder="Bark 分组（可选，如 SMS）" clearable />
             </section>
             <section class="system-tool-section">
               <div class="system-tool-section-title">TG Bot</div>
@@ -2431,6 +2432,7 @@ const localSpeedTestSummary = computed(() => {
 const smsForward = reactive({
   barkEnabled: false,
   barkUrl: '',
+  barkGroup: '',
   tgEnabled: false,
   tgBotToken: '',
   tgChatId: '',
@@ -2633,6 +2635,7 @@ async function loadSmsForwardStatus() {
     const config = data.config || {};
     smsForward.barkEnabled = !!config.bark_enabled;
     smsForward.barkUrl = config.bark_url || '';
+    smsForward.barkGroup = config.bark_group || '';
     smsForward.tgEnabled = !!config.tg_enabled;
     smsForward.tgBotToken = config.tg_bot_token || '';
     smsForward.tgChatId = config.tg_chat_id || '';
@@ -2657,6 +2660,7 @@ async function saveSmsForwardConfig(showMessage = true) {
     const res = await axios.put('/api/system/sms-forward/config', {
       bark_enabled: smsForward.barkEnabled,
       bark_url: smsForward.barkUrl,
+      bark_group: smsForward.barkGroup,
       tg_enabled: smsForward.tgEnabled,
       tg_bot_token: smsForward.tgBotToken,
       tg_chat_id: smsForward.tgChatId,
@@ -2687,6 +2691,7 @@ async function forwardSms(onlyLatest: boolean) {
     const res = await axios.post('/api/system/sms/forward', {
       bark_enabled: smsForward.barkEnabled,
       bark_url: smsForward.barkUrl,
+      bark_group: smsForward.barkGroup,
       tg_enabled: smsForward.tgEnabled,
       tg_bot_token: smsForward.tgBotToken,
       tg_chat_id: smsForward.tgChatId,

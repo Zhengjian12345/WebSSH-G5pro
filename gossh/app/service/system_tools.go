@@ -28,6 +28,8 @@ const smsForwardDefaultDir = "/data/kano_plugins/sms_forward"
 const smsForwardConfigName = "config.json"
 const smsForwardAutostartMarker = ".autostart"
 const smsForwardPollInterval = 3 * time.Second
+const smsForwardCompleteQuietWindow = 3 * time.Second
+const smsForwardCompleteMaxWait = 9 * time.Second
 
 type smsMessage struct {
 	ID       int    `json:"id"`
@@ -42,6 +44,7 @@ type smsMessage struct {
 type smsForwardConfig struct {
 	BarkEnabled bool   `json:"bark_enabled"`
 	BarkURL     string `json:"bark_url"`
+	BarkGroup   string `json:"bark_group"`
 	TgEnabled   bool   `json:"tg_enabled"`
 	TgBotToken  string `json:"tg_bot_token"`
 	TgChatID    string `json:"tg_chat_id"`
@@ -54,6 +57,19 @@ type smsForwardRuntimeStatus struct {
 	LastError string `json:"last_error"`
 	SentCount int    `json:"sent_count"`
 	LastID    int    `json:"last_id"`
+}
+
+type smsForwardPendingBatch struct {
+	Number    string
+	Message   smsMessage
+	signature string
+	FirstSeen time.Time
+	LastSeen  time.Time
+}
+
+type smsForwardPendingState struct {
+	byNumber  map[string]*smsForwardPendingBatch
+	completed map[int]struct{}
 }
 
 var smsForwardMu sync.Mutex
@@ -154,6 +170,7 @@ func SystemSmsForwardHandler(c *gin.Context) {
 	type body struct {
 		BarkEnabled bool   `json:"bark_enabled"`
 		BarkURL     string `json:"bark_url"`
+		BarkGroup   string `json:"bark_group"`
 		TgEnabled   bool   `json:"tg_enabled"`
 		TgBotToken  string `json:"tg_bot_token"`
 		TgChatID    string `json:"tg_chat_id"`
@@ -199,10 +216,12 @@ func SystemSmsForwardHandler(c *gin.Context) {
 	for _, msg := range targets {
 		title := fmt.Sprintf("短信 %s", msg.Number)
 		text := fmt.Sprintf("%s\n时间: %s", msg.Content, msg.Date)
+		msgSent := 0
 		if req.BarkEnabled {
-			if err := sendBark(req.BarkURL, title, text); err != nil {
+			if err := sendBark(req.BarkURL, req.BarkGroup, title, text); err != nil {
 				errs = append(errs, "Bark: "+err.Error())
 			} else {
+				msgSent++
 				sent++
 			}
 		}
@@ -210,7 +229,13 @@ func SystemSmsForwardHandler(c *gin.Context) {
 			if err := sendTelegram(req.TgBotToken, req.TgChatID, text); err != nil {
 				errs = append(errs, "TG: "+err.Error())
 			} else {
+				msgSent++
 				sent++
+			}
+		}
+		if msgSent > 0 {
+			if err := markSmsRead(msg.ID); err != nil {
+				slog.Warn("mark sms read failed", "id", msg.ID, "err", err)
 			}
 		}
 	}
@@ -286,7 +311,8 @@ func runSmsForwardWorker(stop <-chan struct{}, fromAutostart bool) {
 	ticker := time.NewTicker(smsForwardPollInterval)
 	defer ticker.Stop()
 
-	if err := smsForwardPollOnce(); err != nil {
+	pending := newSmsForwardPendingState()
+	if err := smsForwardPollOnce(pending); err != nil {
 		setSmsForwardLastError(err.Error())
 	}
 	for {
@@ -294,14 +320,14 @@ func runSmsForwardWorker(stop <-chan struct{}, fromAutostart bool) {
 		case <-stop:
 			return
 		case <-ticker.C:
-			if err := smsForwardPollOnce(); err != nil {
+			if err := smsForwardPollOnce(pending); err != nil {
 				setSmsForwardLastError(err.Error())
 			}
 		}
 	}
 }
 
-func smsForwardPollOnce() error {
+func smsForwardPollOnce(pending *smsForwardPendingState) error {
 	cfg, err := loadSmsForwardConfig()
 	if err != nil {
 		return err
@@ -328,50 +354,145 @@ func smsForwardPollOnce() error {
 		return nil
 	}
 
-	targets := make([]smsMessage, 0)
+	now := time.Now()
 	for _, msg := range messages {
 		if msg.ID > cfg.LastID {
-			targets = append(targets, msg)
+			pending.add(msg, now)
 		}
 	}
-	sort.Slice(targets, func(i, j int) bool { return targets[i].ID < targets[j].ID })
 
+	readyBatches := pending.ready(now)
 	sent := 0
 	var errs []string
-	for _, msg := range targets {
-		title := fmt.Sprintf("短信 %s", msg.Number)
-		text := fmt.Sprintf("%s\n", msg.Content)
-		if cfg.BarkEnabled {
-			if err := sendBark(cfg.BarkURL, title, text); err != nil {
-				errs = append(errs, "Bark: "+err.Error())
-			} else {
-				sent++
+	for _, batch := range readyBatches {
+		n, batchErrs := sendSmsForwardBatch(cfg, batch)
+		sent += n
+		errs = append(errs, batchErrs...)
+		if n > 0 {
+			pending.completed[batch.Message.ID] = struct{}{}
+			if err := markSmsRead(batch.Message.ID); err != nil {
+				slog.Warn("mark sms read failed", "id", batch.Message.ID, "err", err)
 			}
 		}
-		if cfg.TgEnabled {
-			if err := sendTelegram(cfg.TgBotToken, cfg.TgChatID, text); err != nil {
-				errs = append(errs, "TG: "+err.Error())
-			} else {
-				sent++
-			}
-		}
-		if msg.ID > cfg.LastID {
-			cfg.LastID = msg.ID
-		}
 	}
-	if cfg.LastID != latestID {
-		cfg.LastID = latestID
-	}
-	if len(targets) > 0 {
+
+	nextID := pending.nextLastID(latestID)
+	if nextID != cfg.LastID {
+		cfg.LastID = nextID
 		if err := saveSmsForwardConfig(cfg); err != nil {
 			return err
 		}
+		pending.discardCompletedThrough(cfg.LastID)
 	}
 	setSmsForwardSent(sent, cfg.LastID)
 	if len(errs) > 0 {
 		return errors.New(strings.Join(errs, "; "))
 	}
 	setSmsForwardLastError("")
+	return nil
+}
+
+func newSmsForwardPendingState() *smsForwardPendingState {
+	return &smsForwardPendingState{
+		byNumber:  make(map[string]*smsForwardPendingBatch),
+		completed: make(map[int]struct{}),
+	}
+}
+
+func (s *smsForwardPendingState) add(msg smsMessage, now time.Time) {
+	if _, done := s.completed[msg.ID]; done {
+		return
+	}
+	key := smsForwardPendingKey(msg)
+	if _, ok := s.byNumber[key]; ok {
+		return
+	}
+	s.byNumber[key] = &smsForwardPendingBatch{
+		Number:    msg.Number,
+		Message:   msg,
+		signature: smsForwardMessageSignature(msg),
+		FirstSeen: now,
+		LastSeen:  now,
+	}
+}
+
+func (s *smsForwardPendingState) ready(now time.Time) []*smsForwardPendingBatch {
+	var readyBatches []*smsForwardPendingBatch
+	for key, batch := range s.byNumber {
+		quiet := now.Sub(batch.LastSeen) >= smsForwardCompleteQuietWindow
+		maxWait := now.Sub(batch.FirstSeen) >= smsForwardCompleteMaxWait
+		if quiet || maxWait {
+			readyBatches = append(readyBatches, batch)
+			delete(s.byNumber, key)
+		}
+	}
+	return readyBatches
+}
+
+func (s *smsForwardPendingState) nextLastID(current int) int {
+	if len(s.byNumber) == 0 {
+		return current
+	}
+	minPending := current
+	for _, batch := range s.byNumber {
+		if batch.Message.ID < minPending {
+			minPending = batch.Message.ID
+		}
+	}
+	result := minPending - 1
+	if result > current {
+		result = current
+	}
+	return result
+}
+
+func (s *smsForwardPendingState) discardCompletedThrough(lastID int) {
+	for id := range s.completed {
+		if id <= lastID {
+			delete(s.completed, id)
+		}
+	}
+}
+
+func smsForwardPendingKey(msg smsMessage) string {
+	return msg.Number + "|" + smsForwardMessageSignature(msg)
+}
+
+func smsForwardMessageSignature(msg smsMessage) string {
+	return msg.Number + ":" + msg.Content + ":" + msg.Date
+}
+
+func sendSmsForwardBatch(cfg smsForwardConfig, batch *smsForwardPendingBatch) (int, []string) {
+	msg := batch.Message
+	title := fmt.Sprintf("短信 %s", msg.Number)
+	text := fmt.Sprintf("%s\n", msg.Content)
+	sent := 0
+	var errs []string
+	if cfg.BarkEnabled {
+		if err := sendBark(cfg.BarkURL, cfg.BarkGroup, title, text); err != nil {
+			errs = append(errs, "Bark: "+err.Error())
+		} else {
+			sent++
+		}
+	}
+	if cfg.TgEnabled {
+		if err := sendTelegram(cfg.TgBotToken, cfg.TgChatID, text); err != nil {
+			errs = append(errs, "TG: "+err.Error())
+		} else {
+			sent++
+		}
+	}
+	return sent, errs
+}
+
+func markSmsRead(id int) error {
+	_, err := utils.GetDataFromUbus("zwrt_wms", "zwrt_wms_modify_tag", map[string]interface{}{
+		"id":  strconv.Itoa(id),
+		"tag": 1,
+	})
+	if err != nil {
+		return fmt.Errorf("标记短信已读失败: %w", err)
+	}
 	return nil
 }
 
@@ -558,7 +679,7 @@ func decodeUtf16BEHex(value string) string {
 	return string(utf16.Decode(u16))
 }
 
-func sendBark(rawURL string, title string, body string) error {
+func sendBark(rawURL string, group string, title string, body string) error {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
 		return fmt.Errorf("Bark 地址为空")
@@ -576,6 +697,9 @@ func sendBark(rawURL string, title string, body string) error {
 		"device_key": deviceKey,
 		"title":      title,
 		"body":       body,
+	}
+	if group = strings.TrimSpace(group); group != "" {
+		payloadData["group"] = group
 	}
 	if icon := strings.TrimSpace(base.Query().Get("icon")); icon != "" {
 		payloadData["icon"] = icon

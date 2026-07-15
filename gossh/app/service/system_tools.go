@@ -802,10 +802,11 @@ func sendWecom(webhookURL string, title string, content string) error {
 	if webhookURL == "" {
 		return fmt.Errorf("企业微信 Webhook 地址为空")
 	}
+	// 使用 text 类型（markdown 在个人微信中不支持，会显示"暂不支持此消息类型"）
 	payload := map[string]interface{}{
-		"msgtype": "markdown",
-		"markdown": map[string]string{
-			"content": fmt.Sprintf("## %s\n> %s", title, strings.ReplaceAll(content, "\n", "\n> ")),
+		"msgtype": "text",
+		"text": map[string]string{
+			"content": title + "\n" + content,
 		},
 	}
 	data, err := json.Marshal(payload)

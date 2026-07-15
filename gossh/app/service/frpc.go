@@ -8,12 +8,15 @@ import (
 	"gossh/gin"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -27,10 +30,42 @@ const (
 	frpcAutostartMarker  = ".autostart"
 	frpcDownloadBase     = "https://github.com/fatedier/frp/releases/download"
 	frpcLatestVersion    = "v0.70.0"
-	frpcArm64Archive     = "frp_0.70.0_linux_arm64.tar.gz"
 	frpcGitHubRepo       = "fatedier/frp"
 	frpcAPIRequestHeader = "WebSSH-u60pro-frpc"
 )
+
+// 内置 gh-proxy 列表（mihomo 未运行时使用）
+var frpcProxies = []string{
+	"https://ghfast.top/",
+	"https://gh-proxy.org/",
+	"https://gh-proxy.com/",
+	"https://gh.llkk.cc/",
+	"https://hub.gitmirror.com/",
+}
+
+// ─────────────────────────── 安装进度状态 ───────────────────────────
+
+type FrpcInstallStatus struct {
+	mu      sync.RWMutex
+	State   string `json:"state"`   // idle / downloading / extracting / installing / done / failed / canceled
+	Msg     string `json:"msg"`     // 人类可读描述
+	Percent int    `json:"percent"` // 0-100
+	Stage   string `json:"stage"`   // download / extract / install
+}
+
+var frpcInstallStatus = &FrpcInstallStatus{State: "idle", Msg: "暂无任务"}
+
+func (s *FrpcInstallStatus) update(fn func(*FrpcInstallStatus)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fn(s)
+}
+
+func (s *FrpcInstallStatus) get() FrpcInstallStatus {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return *s
+}
 
 // ─────────────────────────── 辅助函数 ───────────────────────────
 
@@ -85,13 +120,6 @@ func getFrpcVersion() string {
 }
 
 // getFrpcWebServerInfo 从 frpc.toml 中解析 webServer 配置段，返回 addr, port, user, password。
-// frpc 的 TOML 配置格式示例：
-//
-//	[webServer]
-//	addr = "127.0.0.1"
-//	port = 7400
-//	user = "admin"
-//	password = "admin"
 func getFrpcWebServerInfo() (addr, port, user, password string) {
 	configPath := getFrpcConfig()
 	data, err := os.ReadFile(configPath)
@@ -102,7 +130,6 @@ func getFrpcWebServerInfo() (addr, port, user, password string) {
 	inWebServer := false
 	for _, line := range strings.Split(string(data), "\n") {
 		trim := strings.TrimSpace(line)
-		// 去掉注释
 		if idx := strings.Index(trim, "#"); idx >= 0 {
 			trim = strings.TrimSpace(trim[:idx])
 		}
@@ -140,7 +167,6 @@ func extractTOMLValue(line, key string) string {
 		return ""
 	}
 	val := strings.TrimSpace(parts[1])
-	// 去掉引号
 	val = strings.Trim(val, `"'`)
 	return val
 }
@@ -161,7 +187,7 @@ func callFrpcAPI(method, apiPath string, body interface{}) (json.RawMessage, err
 		return nil, fmt.Errorf("webServer 未配置或配置无效")
 	}
 
-	url := base + apiPath
+	reqURL := base + apiPath
 	var bodyReader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -173,7 +199,7 @@ func callFrpcAPI(method, apiPath string, body interface{}) (json.RawMessage, err
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, reqURL, bodyReader)
 	if err != nil {
 		return nil, fmt.Errorf("创建请求失败: %w", err)
 	}
@@ -182,7 +208,6 @@ func callFrpcAPI(method, apiPath string, body interface{}) (json.RawMessage, err
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	// Basic Auth
 	_, _, user, password := getFrpcWebServerInfo()
 	if user != "" {
 		req.SetBasicAuth(user, password)
@@ -205,137 +230,138 @@ func callFrpcAPI(method, apiPath string, body interface{}) (json.RawMessage, err
 	return respBody, nil
 }
 
-// downloadFrpc 下载指定版本的 frpc ARM64 tar.gz 到临时目录，解压提取 frpc 二进制并移动到目标目录。
-// 使用 gh-proxy 加速下载，多个代理逐个尝试。
-func downloadFrpc(version string) error {
-	dir := getFrpcDir()
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("创建目录失败: %w", err)
-	}
+// ─────────────────────────── 下载（带进度） ───────────────────────────
 
-	// 从 version (如 v0.70.0) 提取纯版本号用于文件名
+// buildFrpcHTTPClient 构建带代理的 HTTP 客户端。
+// 优先使用 mihomo 代理，不可用则直连。
+func buildFrpcHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = (&net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext
+	transport.TLSHandshakeTimeout = 10 * time.Second
+	transport.ResponseHeaderTimeout = 15 * time.Second
+	transport.IdleConnTimeout = 60 * time.Second
+
+	// 检测 mihomo 代理
+	proxyURL := getMihomoProxyURL()
+	if proxyURL != "" {
+		conn, err := net.DialTimeout("tcp", proxyURL, 1*time.Second)
+		if err == nil {
+			conn.Close()
+			parsed, parseErr := url.Parse("http://" + proxyURL)
+			if parseErr == nil {
+				transport.Proxy = http.ProxyURL(parsed)
+				slog.Info("[frpc] 使用 mihomo 代理下载", "proxy", proxyURL)
+			}
+		}
+	}
+	return &http.Client{Transport: transport, Timeout: 300 * time.Second}
+}
+
+// downloadFrpcWithProgress 下载 frpc tar.gz 并实时上报进度。
+func downloadFrpcWithProgress(ctx context.Context, version, destPath string, onProgress func(downloaded, total int64, msg string)) error {
 	versionClean := strings.TrimPrefix(version, "v")
 	archiveName := fmt.Sprintf("frp_%s_linux_arm64.tar.gz", versionClean)
 	originalURL := fmt.Sprintf("%s/%s/%s", frpcDownloadBase, version, archiveName)
 
-	// 构建代理 URL 列表（与 mihomo 使用相同代理）
-	proxies := []string{
-		"https://ghfast.top/",
-		"https://gh-proxy.org/",
-		"https://gh-proxy.com/",
-		"https://gh.llkk.cc/",
-		"https://hub.gitmirror.com/",
-	}
+	// 构建下载 URL 列表
 	tryURLs := []string{originalURL}
-	for _, proxy := range proxies {
-		tryURLs = append(tryURLs, proxy+originalURL)
+	proxyURL := getMihomoProxyURL()
+	if proxyURL == "" {
+		// mihomo 未运行，添加 gh-proxy
+		for _, proxy := range frpcProxies {
+			tryURLs = append(tryURLs, proxy+originalURL)
+		}
 	}
 
-	tmpDir, err := os.MkdirTemp("", "frpc-download-*")
-	if err != nil {
-		return fmt.Errorf("创建临时目录失败: %w", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	archivePath := filepath.Join(tmpDir, archiveName)
-	slog.Info("[frpc] 开始下载", "version", version, "archive", archiveName)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
-	defer cancel()
-
+	client := buildFrpcHTTPClient()
 	var lastErr error
-	for i, downloadURL := range tryURLs {
-		slog.Info("[frpc] 尝试下载", "url", downloadURL, "attempt", i+1, "total", len(tryURLs))
-		dlCtx, dlCancel := context.WithTimeout(ctx, 60*time.Second)
-		cmd := exec.CommandContext(dlCtx, "/bin/sh", "-c",
-			fmt.Sprintf("curl -fsSL --connect-timeout 15 -o '%s' '%s'", archivePath, downloadURL))
-		out, err := cmd.CombinedOutput()
-		dlCancel()
+
+	for i, u := range tryURLs {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		slog.Info("[frpc] 尝试下载", "url", u, "attempt", i+1, "total", len(tryURLs))
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 		if err != nil {
-			lastErr = fmt.Errorf("%w, output: %s", err, strings.TrimSpace(string(out)))
-			slog.Warn("[frpc] 下载失败", "url", downloadURL, "err", lastErr)
+			lastErr = err
 			continue
 		}
-		lastErr = nil
-		break
-	}
-	if lastErr != nil {
-		return fmt.Errorf("所有线路均下载失败: %w", lastErr)
-	}
+		req.Header.Set("User-Agent", frpcAPIRequestHeader)
 
-	// 验证文件大小
-	info, err := os.Stat(archivePath)
-	if err != nil {
-		return fmt.Errorf("下载文件不存在: %w", err)
-	}
-	if info.Size() == 0 {
-		return fmt.Errorf("下载文件为空")
-	}
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			slog.Warn("[frpc] 下载失败", "url", u, "err", err)
+			continue
+		}
 
-	// 解压
-	slog.Info("[frpc] 正在解压", "archive", archiveName)
-	extractDir := filepath.Join(tmpDir, "extract")
-	if err := os.MkdirAll(extractDir, 0755); err != nil {
-		return fmt.Errorf("创建解压目录失败: %w", err)
-	}
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			lastErr = fmt.Errorf("HTTP %d from %s", resp.StatusCode, u)
+			slog.Warn("[frpc] 下载失败", "url", u, "err", lastErr)
+			continue
+		}
 
-	cmd := exec.CommandContext(ctx, "/bin/sh", "-c",
-		fmt.Sprintf("tar -xzf '%s' -C '%s'", archivePath, extractDir))
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("解压失败: %w, output: %s", err, strings.TrimSpace(string(out)))
-	}
+		total := resp.ContentLength
+		out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+		if err != nil {
+			resp.Body.Close()
+			return err
+		}
 
-	// 查找 frpc 二进制 —— tar.gz 内的顶层目录名可能是 frp_0.70.0_linux_arm64
-	entries, err := os.ReadDir(extractDir)
-	if err != nil {
-		return fmt.Errorf("读取解压目录失败: %w", err)
-	}
-
-	var frpcBinPath string
-	for _, entry := range entries {
-		if entry.IsDir() {
-			candidate := filepath.Join(extractDir, entry.Name(), frpcBinaryName)
-			if _, statErr := os.Stat(candidate); statErr == nil {
-				frpcBinPath = candidate
+		buf := make([]byte, 64*1024)
+		var downloaded int64
+		var writeErr error
+		for {
+			if ctx.Err() != nil {
+				out.Close()
+				resp.Body.Close()
+				_ = os.Remove(destPath)
+				return ctx.Err()
+			}
+			n, readErr := resp.Body.Read(buf)
+			if n > 0 {
+				written, werr := out.Write(buf[:n])
+				downloaded += int64(written)
+				if onProgress != nil {
+					onProgress(downloaded, total, "正在下载...")
+				}
+				if werr != nil {
+					writeErr = werr
+					break
+				}
+				if written != n {
+					writeErr = io.ErrShortWrite
+					break
+				}
+			}
+			if readErr == io.EOF {
+				break
+			}
+			if readErr != nil {
+				writeErr = readErr
 				break
 			}
 		}
-	}
-	// 也有可能直接在 extractDir 下
-	if frpcBinPath == "" {
-		candidate := filepath.Join(extractDir, frpcBinaryName)
-		if _, statErr := os.Stat(candidate); statErr == nil {
-			frpcBinPath = candidate
+		resp.Body.Close()
+		out.Close()
+
+		if writeErr != nil {
+			_ = os.Remove(destPath)
+			lastErr = writeErr
+			continue
 		}
+		return nil
 	}
-	if frpcBinPath == "" {
-		return fmt.Errorf("解压后未找到 frpc 二进制")
-	}
-
-	// 停止正在运行的 frpc
-	if running, pid := isFrpcRunning(); running {
-		slog.Info("[frpc] 安装前停止运行中的 frpc", "pid", pid)
-		stopFrpc()
-		time.Sleep(500 * time.Millisecond)
-	}
-
-	// 备份旧二进制
-	targetBin := getFrpcBinary()
-	if _, err := os.Stat(targetBin); err == nil {
-		_ = os.Rename(targetBin, targetBin+".bak")
-	}
-
-	// 移动到目标
-	if err := os.Rename(frpcBinPath, targetBin); err != nil {
-		return fmt.Errorf("移动二进制失败: %w", err)
-	}
-	if err := os.Chmod(targetBin, 0755); err != nil {
-		return fmt.Errorf("设置权限失败: %w", err)
-	}
-
-	slog.Info("[frpc] 安装完成", "version", version, "path", targetBin)
-	return nil
+	return fmt.Errorf("所有下载线路均失败: %w", lastErr)
 }
+
+// ─────────────────────────── 进程管理 ───────────────────────────
 
 // startFrpc 后台启动 frpc 并写入 PID 文件。
 func startFrpc() error {
@@ -350,7 +376,6 @@ func startFrpc() error {
 		return fmt.Errorf("配置文件不存在: %s", configPath)
 	}
 
-	// 确保目录存在
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("创建目录失败: %w", err)
 	}
@@ -363,13 +388,11 @@ func startFrpc() error {
 		return fmt.Errorf("启动失败: %w", err)
 	}
 
-	// 写入 PID
 	pidFile := filepath.Join(dir, frpcPIDName)
 	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(cmd.Process.Pid)), 0644); err != nil {
 		slog.Warn("[frpc] 写入 PID 文件失败", "err", err.Error())
 	}
 
-	// 释放进程使其独立运行
 	go func() {
 		_ = cmd.Wait()
 	}()
@@ -390,30 +413,22 @@ func stopFrpc() error {
 		return fmt.Errorf("解析 PID 失败: %w", err)
 	}
 
-	// 检查进程是否存在
-	if _, statErr := os.Stat(fmt.Sprintf("/proc/%d", pid)); statErr != nil {
-		_ = os.Remove(pidFile)
-		return nil
-	}
-
-	// 发送 SIGTERM
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return fmt.Errorf("查找进程失败: %w", err)
-	}
-	if err := exec.Command("kill", "-TERM", fmt.Sprintf("%d", pid)).Run(); err != nil {
-		return fmt.Errorf("终止进程失败: %w", err)
-	}
-
-	// 等待进程退出
-	for i := 0; i < 10; i++ {
-		time.Sleep(200 * time.Millisecond)
-		if _, statErr := os.Stat(fmt.Sprintf("/proc/%d", pid)); statErr != nil {
-			break
+	if _, statErr := os.Stat(fmt.Sprintf("/proc/%d", pid)); statErr == nil {
+		proc, err := os.FindProcess(pid)
+		if err != nil {
+			return fmt.Errorf("查找进程失败: %w", err)
 		}
-		// 第二次发送 SIGKILL
-		if i == 3 {
-			_ = proc.Kill()
+		if err := exec.Command("kill", "-TERM", fmt.Sprintf("%d", pid)).Run(); err != nil {
+			return fmt.Errorf("终止进程失败: %w", err)
+		}
+		for i := 0; i < 10; i++ {
+			time.Sleep(200 * time.Millisecond)
+			if _, statErr := os.Stat(fmt.Sprintf("/proc/%d", pid)); statErr != nil {
+				break
+			}
+			if i == 3 {
+				_ = proc.Kill()
+			}
 		}
 	}
 
@@ -519,7 +534,6 @@ func FrpcStatusHandler(c *gin.Context) {
 }
 
 // FrpcControlHandler POST /api/frpc/control
-// 请求体: {"action": "start" | "stop" | "restart" | "reload"}
 func FrpcControlHandler(c *gin.Context) {
 	var req struct {
 		Action string `json:"action" binding:"required"`
@@ -578,7 +592,6 @@ func FrpcGetConfigHandler(c *gin.Context) {
 }
 
 // FrpcSaveConfigHandler PUT /api/frpc/config
-// 请求体: {"content": "toml内容"}
 func FrpcSaveConfigHandler(c *gin.Context) {
 	var req struct {
 		Content string `json:"content"`
@@ -595,7 +608,6 @@ func FrpcSaveConfigHandler(c *gin.Context) {
 	}
 
 	configPath := getFrpcConfig()
-	// 备份旧配置
 	if existing, err := os.ReadFile(configPath); err == nil {
 		_ = os.WriteFile(configPath+".bak", existing, 0644)
 	}
@@ -615,7 +627,6 @@ func FrpcGetAutostartHandler(c *gin.Context) {
 }
 
 // FrpcSetAutostartHandler POST /api/frpc/autostart
-// 请求体: {"enabled": true/false}
 func FrpcSetAutostartHandler(c *gin.Context) {
 	var req struct {
 		Enabled bool `json:"enabled"`
@@ -673,7 +684,6 @@ func InitFrpcAutostart() {
 // ─────────────────────────── Handlers: 代理管理 ───────────────────────────
 
 // FrpcGetProxiesHandler GET /api/frpc/proxies
-// 调用 frpc 的 GET /api/status API，返回代理列表及状态。
 func FrpcGetProxiesHandler(c *gin.Context) {
 	rawBody, err := callFrpcAPI(http.MethodGet, "/api/status", nil)
 	if err != nil {
@@ -681,18 +691,14 @@ func FrpcGetProxiesHandler(c *gin.Context) {
 		return
 	}
 
-	// frpc /api/status 返回的 JSON 结构可能为:
-	// {"proxies": [{"name": "...", "type": "...", "status": "...", ...}]}
 	var statusResp struct {
 		Proxies []json.RawMessage `json:"proxies"`
 	}
 	if err := json.Unmarshal(rawBody, &statusResp); err != nil {
-		// 直接返回原始内容
 		c.JSON(200, gin.H{"code": 0, "msg": "ok", "data": gin.H{"raw": json.RawMessage(rawBody)}})
 		return
 	}
 
-	// 精简代理信息
 	type ProxySummary struct {
 		Name   string `json:"name"`
 		Type   string `json:"type,omitempty"`
@@ -703,7 +709,6 @@ func FrpcGetProxiesHandler(c *gin.Context) {
 	for _, raw := range statusResp.Proxies {
 		var p ProxySummary
 		if err := json.Unmarshal(raw, &p); err != nil {
-			// 解析失败则保留原始 JSON
 			var fallback map[string]interface{}
 			if err := json.Unmarshal(raw, &fallback); err == nil {
 				if name, ok := fallback["name"].(string); ok {
@@ -716,15 +721,11 @@ func FrpcGetProxiesHandler(c *gin.Context) {
 
 	c.JSON(200, gin.H{
 		"code": 0, "msg": "ok",
-		"data": gin.H{
-			"proxies": proxies,
-			"total":   len(proxies),
-		},
+		"data": gin.H{"proxies": proxies, "total": len(proxies)},
 	})
 }
 
 // FrpcSetProxyHandler POST /api/frpc/proxies
-// 请求体: {"action": "add" | "delete" | "update", "proxy": {...}}
 func FrpcSetProxyHandler(c *gin.Context) {
 	var req struct {
 		Action string          `json:"action" binding:"required"`
@@ -743,7 +744,6 @@ func FrpcSetProxyHandler(c *gin.Context) {
 
 	switch req.Action {
 	case "add":
-		// POST /api/store/proxies
 		rawBody, err := callFrpcAPI(http.MethodPost, "/api/store/proxies", req.Proxy)
 		if err != nil {
 			c.JSON(200, gin.H{"code": 1, "msg": "添加代理失败: " + err.Error()})
@@ -752,7 +752,6 @@ func FrpcSetProxyHandler(c *gin.Context) {
 		c.JSON(200, gin.H{"code": 0, "msg": "代理已添加", "data": json.RawMessage(rawBody)})
 
 	case "update":
-		// 从 proxy 对象中提取 name 以构建 URL
 		var proxyInfo struct {
 			Name string `json:"name"`
 		}
@@ -769,7 +768,6 @@ func FrpcSetProxyHandler(c *gin.Context) {
 		c.JSON(200, gin.H{"code": 0, "msg": "代理已更新", "data": json.RawMessage(rawBody)})
 
 	case "delete":
-		// 从 proxy 对象中提取 name 以构建 URL
 		var proxyInfo struct {
 			Name string `json:"name"`
 		}
@@ -787,10 +785,9 @@ func FrpcSetProxyHandler(c *gin.Context) {
 	}
 }
 
-// ─────────────────────────── Handlers: 版本检查 & 安装 ───────────────────────────
+// ─────────────────────────── Handlers: 版本检查 ───────────────────────────
 
 // FrpcCheckBinaryVersionHandler GET /api/frpc/binary/version
-// 通过 GitHub API 检查 frpc 最新版本号。
 func FrpcCheckBinaryVersionHandler(c *gin.Context) {
 	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", frpcGitHubRepo)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -828,13 +825,11 @@ func FrpcCheckBinaryVersionHandler(c *gin.Context) {
 		return
 	}
 
-	// 如果 API 返回速率限制等消息
 	if release.TagName == "" && release.Message != "" {
 		c.JSON(200, gin.H{"code": 1, "msg": "GitHub API: " + release.Message})
 		return
 	}
 
-	// 本地已安装版本
 	localVersion := getFrpcVersion()
 	binaryExists := true
 	if _, err := os.Stat(getFrpcBinary()); err != nil {
@@ -842,7 +837,6 @@ func FrpcCheckBinaryVersionHandler(c *gin.Context) {
 		localVersion = ""
 	}
 
-	// 默认使用 frpcLatestVersion 作为 fallback
 	remoteVersion := release.TagName
 	if remoteVersion == "" {
 		remoteVersion = frpcLatestVersion
@@ -862,62 +856,256 @@ func FrpcCheckBinaryVersionHandler(c *gin.Context) {
 	})
 }
 
+// ─────────────────────────── Handlers: 安装/更新（带进度） ───────────────────────────
+
 // FrpcInstallHandler POST /api/frpc/install
-// 请求体: {"action": "install" | "update" | "uninstall", "mode": "soft" | "full"}
+// {"action": "install" | "update" | "uninstall", "mode": "soft" | "full"}
+// install/update 改为后台执行，通过 SSE 推送进度。
 func FrpcInstallHandler(c *gin.Context) {
 	var req struct {
 		Action string `json:"action" binding:"required"`
-		Mode   string `json:"mode"` // uninstall 时的模式: soft(仅删二进制) / full(全删)
+		Mode   string `json:"mode"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(200, gin.H{"code": 1, "msg": "参数错误: " + err.Error()})
 		return
 	}
 
-	validActions := map[string]bool{"install": true, "update": true, "uninstall": true}
-	if !validActions[req.Action] {
+	if req.Action == "uninstall" {
+		doFrpcUninstall(c, req.Mode)
+		return
+	}
+
+	if req.Action != "install" && req.Action != "update" {
 		c.JSON(200, gin.H{"code": 1, "msg": "无效操作: " + req.Action})
 		return
 	}
 
-	switch req.Action {
-	case "install", "update":
-		version := frpcLatestVersion
-		if err := downloadFrpc(version); err != nil {
-			c.JSON(200, gin.H{"code": 1, "msg": "安装失败: " + err.Error()})
-			return
-		}
-		c.JSON(200, gin.H{"code": 0, "msg": "安装完成", "data": gin.H{"version": version}})
-
-	case "uninstall":
-		if req.Mode == "" {
-			req.Mode = "soft"
-		}
-
-		// 先停止运行中的 frpc
-		if running, pid := isFrpcRunning(); running {
-			slog.Info("[frpc] 卸载前停止", "pid", pid)
-			_ = stopFrpc()
-		}
-
-		if req.Mode == "full" {
-			// 删除整个目录
-			dir := getFrpcDir()
-			if err := os.RemoveAll(dir); err != nil {
-				c.JSON(200, gin.H{"code": 1, "msg": "删除失败: " + err.Error()})
-				return
-			}
-			c.JSON(200, gin.H{"code": 0, "msg": "已删除全部 frpc 文件"})
-			return
-		}
-
-		// soft: 仅删除二进制，保留配置
-		binPath := getFrpcBinary()
-		_ = os.Remove(binPath + ".bak")
-		if err := os.Remove(binPath); err != nil && !os.IsNotExist(err) {
-			c.JSON(200, gin.H{"code": 1, "msg": "删除二进制失败: " + err.Error()})
-			return
-		}
-		c.JSON(200, gin.H{"code": 0, "msg": "已删除 frpc 二进制（配置已保留）"})
+	current := frpcInstallStatus.get()
+	if current.State == "downloading" || current.State == "extracting" || current.State == "installing" {
+		c.JSON(200, gin.H{"code": 1, "msg": "安装任务正在进行中"})
+		return
 	}
+
+	go doFrpcInstall(req.Action)
+	c.JSON(200, gin.H{"code": 0, "msg": "已开始"})
+}
+
+// doFrpcInstall 后台执行 frpc 安装/更新，实时更新 frpcInstallStatus。
+func doFrpcInstall(action string) {
+	proxyURL := getMihomoProxyURL()
+	useMihomo := proxyURL != ""
+
+	frpcInstallStatus.update(func(s *FrpcInstallStatus) {
+		s.State = "downloading"
+		s.Percent = 0
+		s.Stage = "download"
+		if useMihomo {
+			s.Msg = "正在通过 mihomo 代理下载..."
+		} else {
+			s.Msg = "正在下载 frpc..."
+		}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	version := frpcLatestVersion
+
+	// 下载
+	tmpDir, err := os.MkdirTemp("", "frpc-download-*")
+	if err != nil {
+		frpcInstallStatus.update(func(s *FrpcInstallStatus) { s.State = "failed"; s.Msg = "创建临时目录失败" })
+		return
+	}
+	defer os.RemoveAll(tmpDir)
+
+	versionClean := strings.TrimPrefix(version, "v")
+	archiveName := fmt.Sprintf("frp_%s_linux_arm64.tar.gz", versionClean)
+	archivePath := filepath.Join(tmpDir, archiveName)
+
+	err = downloadFrpcWithProgress(ctx, version, archivePath, func(downloaded, total int64, msg string) {
+		pct := 0
+		if total > 0 {
+			pct = int(downloaded * 100 / total)
+			if pct > 100 {
+				pct = 100
+			}
+		}
+		sizeStr := fmt.Sprintf("%.1f MB / %.1f MB", float64(downloaded)/1024/1024, float64(total)/1024/1024)
+		if total <= 0 {
+			sizeStr = fmt.Sprintf("%.1f MB", float64(downloaded)/1024/1024)
+		}
+		proxyHint := ""
+		if useMihomo {
+			proxyHint = "[mihomo] "
+		}
+		frpcInstallStatus.update(func(s *FrpcInstallStatus) {
+			s.Percent = pct
+			s.Msg = proxyHint + sizeStr
+		})
+	})
+
+	if err != nil {
+		if ctx.Err() != nil {
+			frpcInstallStatus.update(func(s *FrpcInstallStatus) { s.State = "canceled"; s.Msg = "已取消" })
+		} else {
+			frpcInstallStatus.update(func(s *FrpcInstallStatus) { s.State = "failed"; s.Msg = "下载失败: " + err.Error() })
+		}
+		return
+	}
+
+	// 验证
+	info, err := os.Stat(archivePath)
+	if err != nil || info.Size() == 0 {
+		frpcInstallStatus.update(func(s *FrpcInstallStatus) { s.State = "failed"; s.Msg = "下载文件为空" })
+		return
+	}
+
+	// 解压
+	frpcInstallStatus.update(func(s *FrpcInstallStatus) { s.State = "extracting"; s.Msg = "正在解压..."; s.Percent = 75; s.Stage = "extract" })
+	extractDir := filepath.Join(tmpDir, "extract")
+	if err := os.MkdirAll(extractDir, 0755); err != nil {
+		frpcInstallStatus.update(func(s *FrpcInstallStatus) { s.State = "failed"; s.Msg = "创建解压目录失败" })
+		return
+	}
+	cmd := exec.CommandContext(ctx, "tar", "-xzf", archivePath, "-C", extractDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		frpcInstallStatus.update(func(s *FrpcInstallStatus) { s.State = "failed"; s.Msg = "解压失败: " + strings.TrimSpace(string(out)) })
+		return
+	}
+
+	// 查找 frpc 二进制
+	var frpcBinPath string
+	entries, _ := os.ReadDir(extractDir)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			candidate := filepath.Join(extractDir, entry.Name(), frpcBinaryName)
+			if _, statErr := os.Stat(candidate); statErr == nil {
+				frpcBinPath = candidate
+				break
+			}
+		}
+	}
+	if frpcBinPath == "" {
+		candidate := filepath.Join(extractDir, frpcBinaryName)
+		if _, statErr := os.Stat(candidate); statErr == nil {
+			frpcBinPath = candidate
+		}
+	}
+	if frpcBinPath == "" {
+		frpcInstallStatus.update(func(s *FrpcInstallStatus) { s.State = "failed"; s.Msg = "解压后未找到 frpc 二进制" })
+		return
+	}
+
+	// 安装
+	frpcInstallStatus.update(func(s *FrpcInstallStatus) { s.State = "installing"; s.Msg = "正在安装..."; s.Percent = 90; s.Stage = "install" })
+
+	// 停止运行中的 frpc
+	if running, pid := isFrpcRunning(); running {
+		slog.Info("[frpc] 安装前停止运行中的 frpc", "pid", pid)
+		_ = stopFrpc()
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	dir := getFrpcDir()
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		frpcInstallStatus.update(func(s *FrpcInstallStatus) { s.State = "failed"; s.Msg = "创建目录失败" })
+		return
+	}
+
+	targetBin := getFrpcBinary()
+	// 备份
+	if _, err := os.Stat(targetBin); err == nil {
+		_ = os.Rename(targetBin, targetBin+".bak")
+	}
+	// 移动
+	src, err := os.Open(frpcBinPath)
+	if err != nil {
+		frpcInstallStatus.update(func(s *FrpcInstallStatus) { s.State = "failed"; s.Msg = "读取源文件失败" })
+		return
+	}
+	defer src.Close()
+	dst, err := os.OpenFile(targetBin, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	if err != nil {
+		frpcInstallStatus.update(func(s *FrpcInstallStatus) { s.State = "failed"; s.Msg = "写入目标文件失败" })
+		return
+	}
+	defer dst.Close()
+	if _, err := io.Copy(dst, src); err != nil {
+		frpcInstallStatus.update(func(s *FrpcInstallStatus) { s.State = "failed"; s.Msg = "复制二进制失败: " + err.Error() })
+		return
+	}
+
+	newVersion := getFrpcVersion()
+	slog.Info("[frpc] 安装/更新成功", "action", action, "version", newVersion)
+	frpcInstallStatus.update(func(s *FrpcInstallStatus) {
+		s.State = "done"
+		s.Percent = 100
+		s.Msg = "安装完成 (" + newVersion + ")"
+		s.Stage = "done"
+	})
+}
+
+// doFrpcUninstall 卸载 frpc。
+func doFrpcUninstall(c *gin.Context, mode string) {
+	if mode == "" {
+		mode = "soft"
+	}
+
+	if running, pid := isFrpcRunning(); running {
+		slog.Info("[frpc] 卸载前停止", "pid", pid)
+		_ = stopFrpc()
+	}
+
+	if mode == "full" {
+		dir := getFrpcDir()
+		if err := os.RemoveAll(dir); err != nil {
+			c.JSON(200, gin.H{"code": 1, "msg": "删除失败: " + err.Error()})
+			return
+		}
+		c.JSON(200, gin.H{"code": 0, "msg": "已删除全部 frpc 文件"})
+		return
+	}
+
+	binPath := getFrpcBinary()
+	_ = os.Remove(binPath + ".bak")
+	if err := os.Remove(binPath); err != nil && !os.IsNotExist(err) {
+		c.JSON(200, gin.H{"code": 1, "msg": "删除二进制失败: " + err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"code": 0, "msg": "已删除 frpc 二进制（配置已保留）"})
+}
+
+// FrpcInstallProgressHandler GET /api/frpc/install/progress
+// SSE 流式推送安装进度。
+func FrpcInstallProgressHandler(c *gin.Context) {
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+
+	c.Stream(func(w io.Writer) bool {
+		status := frpcInstallStatus.get()
+		data, _ := json.Marshal(status)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		c.Writer.Flush()
+
+		if status.State == "done" || status.State == "failed" || status.State == "canceled" || status.State == "idle" {
+			return false
+		}
+		time.Sleep(500 * time.Millisecond)
+		return true
+	})
+}
+
+// FrpcCancelInstallHandler POST /api/frpc/install/cancel
+func FrpcCancelInstallHandler(c *gin.Context) {
+	frpcInstallStatus.update(func(s *FrpcInstallStatus) {
+		if s.State == "downloading" || s.State == "extracting" || s.State == "installing" {
+			s.State = "canceled"
+			s.Msg = "正在取消..."
+		}
+	})
+	c.JSON(200, gin.H{"code": 0, "msg": "ok"})
 }

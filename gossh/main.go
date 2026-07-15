@@ -1053,6 +1053,8 @@ func main() {
 		auth.POST("/api/frpc/proxies", service.FrpcSetProxyHandler)
 		auth.GET("/api/frpc/binary/version", service.FrpcCheckBinaryVersionHandler)
 		auth.POST("/api/frpc/install", service.FrpcInstallHandler)
+		auth.GET("/api/frpc/install/progress", service.FrpcInstallProgressHandler)
+		auth.POST("/api/frpc/install/cancel", service.FrpcCancelInstallHandler)
 		// Tailscale
 		auth.GET("/api/tailscale/autostart", service.TailscaleGetAutostartHandler)
 		auth.POST("/api/tailscale/autostart", service.TailscaleSetAutostartHandler)

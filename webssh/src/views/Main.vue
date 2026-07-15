@@ -1811,6 +1811,10 @@
 
           <section class="system-tool-section">
             <div class="system-tool-section-title">安装 / 卸载</div>
+            <div v-if="frpc.loading" style="margin-bottom:10px">
+              <el-progress :percentage="frpcInstallProgress.percent" :stroke-width="18" :text-inside="true" :status="frpcInstallProgress.state === 'done' ? 'success' : frpcInstallProgress.state === 'failed' ? 'exception' : undefined" />
+              <p style="margin:6px 0 0;font-size:12px;color:rgba(255,255,255,0.7);">{{ frpcInstallProgress.msg }}</p>
+            </div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
               <el-button v-if="!frpc.installed" type="primary" size="small" :loading="frpc.loading" @click="installFrpc">安装 frpc</el-button>
               <el-button v-if="frpc.installed" type="danger" size="small" :loading="frpc.loading" @click="uninstallFrpc">卸载 frpc</el-button>
@@ -2654,6 +2658,7 @@ const frpc = reactive({
   remoteVersion: '',
   configContent: '',
 });
+const frpcInstallProgress = reactive({ state: 'idle', msg: '', percent: 0, stage: '' });
 
 const frpcAddDialogVisible = ref(false);
 const frpcNewProxy = reactive({
@@ -5737,19 +5742,47 @@ async function setFrpcAutostart(val: boolean) {
 
 async function installFrpc() {
   frpc.loading = true;
+  frpcInstallProgress.state = 'downloading'; frpcInstallProgress.percent = 0; frpcInstallProgress.msg = '正在准备...'; frpcInstallProgress.stage = 'download';
   try {
-    const res = await axios.post('/api/frpc/install', { action: 'install' });
-    if (res.data.code === 0) {
-      ElMessage.success('frpc 安装成功: ' + (res.data.data?.version || ''));
+    const r = await axios.post('/api/frpc/install', { action: 'install' });
+    if (r.data.code !== 0) {
+      ElMessage.error(r.data.msg || '启动安装失败');
+      frpc.loading = false;
+      return;
+    }
+    await pollFrpcInstallProgress();
+    if (frpcInstallProgress.state === 'done') {
+      ElMessage.success('frpc 安装成功');
       await loadFrpcStatus();
     } else {
-      ElMessage.error(res.data.msg || '安装失败');
+      ElMessage.error(frpcInstallProgress.msg || '安装失败');
     }
   } catch (e: any) {
-    ElMessage.error('请求失败: ' + (e.message ?? e));
+    ElMessage.error('安装失败: ' + (e.message || e));
   } finally {
     frpc.loading = false;
   }
+}
+
+async function pollFrpcInstallProgress() {
+  const evtSource = new EventSource('/api/frpc/install/progress');
+  await new Promise<void>((resolve) => {
+    evtSource.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        frpcInstallProgress.state = data.state || 'idle';
+        frpcInstallProgress.msg = data.msg || '';
+        frpcInstallProgress.percent = data.percent ?? 0;
+        frpcInstallProgress.stage = data.stage || '';
+        if (['done', 'failed', 'canceled', 'idle'].includes(data.state)) {
+          evtSource.close();
+          resolve();
+        }
+      } catch { /* ignore */ }
+    };
+    evtSource.onerror = () => { evtSource.close(); resolve() };
+    setTimeout(() => { evtSource.close(); resolve() }, 300000);
+  });
 }
 
 async function uninstallFrpc() {

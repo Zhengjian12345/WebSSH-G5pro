@@ -345,7 +345,7 @@ func TailscaleUninstallHandler(c *gin.Context) {
 	}
 
 	// 清理自启动标记（冗余保护）
-	_ = cleanupLegacyTailscaleRcLocal()
+	cleanupLegacyTailscaleRcLocal()
 
 	c.JSON(200, gin.H{"code": 0, "msg": "已卸载 Tailscale"})
 }

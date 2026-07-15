@@ -279,7 +279,7 @@ func downloadFrpc(version string) error {
 		return fmt.Errorf("创建解压目录失败: %w", err)
 	}
 
-	cmd = exec.CommandContext(ctx, "/bin/sh", "-c",
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c",
 		fmt.Sprintf("tar -xzf '%s' -C '%s'", archivePath, extractDir))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("解压失败: %w, output: %s", err, strings.TrimSpace(string(out)))

@@ -622,7 +622,7 @@ func TailscaleInstallProgressHandler(c *gin.Context) {
 		if status.State == "done" || status.State == "failed" || status.State == "canceled" || status.State == "idle" {
 			return false
 		}
-		time.Sleep 500 * time.Millisecond
+		time.Sleep(500 * time.Millisecond)
 		return true
 	})
 }

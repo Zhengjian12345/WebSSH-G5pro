@@ -1898,7 +1898,14 @@
           </div>
           <div class="mh-info-item">
             <span class="mh-info-label">版本</span>
-            <span class="mh-info-value">{{ tsStatus.version || '-' }}</span>
+            <span class="mh-info-value">
+              {{ tsStatus.version || '-' }}
+              <span v-if="tsHasUpdate" style="color:#F56C6C;font-size:12px;margin-left:4px;">有新版本</span>
+            </span>
+          </div>
+          <div v-if="tsRemoteVersion" class="mh-info-item">
+            <span class="mh-info-label">最新版本</span>
+            <span class="mh-info-value ts-code">{{ tsRemoteVersion }}</span>
           </div>
         </div>
         <div v-if="tsStatus.loginUrl" class="ts-card" style="margin-bottom:12px">
@@ -1936,11 +1943,13 @@
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <el-button v-if="!tsStatus.installed" type="primary" :loading="tsInstalling" @click="installTailscale" style="flex:1;">安装</el-button>
+          <el-button v-if="tsStatus.installed && tsHasUpdate" type="warning" :loading="tsInstalling" @click="updateTailscale" style="flex:1;">更新到 {{ tsRemoteVersion }}</el-button>
           <el-button v-if="tsStatus.installed && !tsStatus.running" type="success" :loading="tsLoading" @click="startTailscale" style="flex:1;">启动</el-button>
           <el-button v-if="tsStatus.installed && tsStatus.running" type="danger" :loading="tsLoading" @click="stopTailscale" style="flex:1;">停止</el-button>
           <el-button v-if="tsStatus.installed && tsStatus.running" type="primary" :loading="tsLoading" @click="loginTailscale" style="flex:1;">登录</el-button>
           <el-button v-if="tsStatus.installed && tsStatus.running" :loading="tsLoading" @click="logoutTailscale" style="flex:1;">登出</el-button>
           <el-button v-if="tsStatus.installed" :loading="tsUninstalling" @click="uninstallTailscale" style="flex:1;">卸载</el-button>
+          <el-button :loading="tsCheckingUpdate" @click="checkTsUpdate" style="flex:1;">检查更新</el-button>
           <el-button :loading="tsRefreshing" @click="refreshTsStatus" style="flex:1;">刷新</el-button>
         </div>
         <pre v-if="tsLog" class="ts-log" style="margin-top:12px">{{ tsLog }}</pre>
@@ -4639,6 +4648,7 @@ const tsRefreshing = ref(false)
 const tsInstalling = ref(false)
 const tsUninstalling = ref(false)
 const tsLog = ref('')
+const tsCheckingUpdate = ref(false)
 
 interface TsStatus {
   installed: boolean
@@ -4651,6 +4661,8 @@ interface TsStatus {
 const tsStatus = reactive<TsStatus>({
   installed: false, running: false, version: '', tsIP: '', hostname: '', loginUrl: ''
 })
+const tsRemoteVersion = ref('')
+const tsHasUpdate = ref(false)
 const tsForm = reactive({
   advertiseRoutes: true,
   acceptRoutes: false,
@@ -4782,6 +4794,16 @@ async function refreshTsStatus() {
     }
     // 如果进程存活但状态获取失败，可能是还在初始化中，保留之前的 IP/hostname
     await checkTsAutoStart()
+    // 自动检查更新（静默，不弹提示）
+    if (tsStatus.installed) {
+      try {
+        const r = await axios.get('/api/tailscale/check-update')
+        if (r.data.code === 0) {
+          tsRemoteVersion.value = r.data.data.remote_version || ''
+          tsHasUpdate.value = r.data.data.has_update
+        }
+      } catch { /* 静默失败 */ }
+    }
   } catch (e: any) {
     ElMessage.error('获取状态失败: ' + (e.message || e))
   } finally {
@@ -4789,38 +4811,106 @@ async function refreshTsStatus() {
   }
 }
 
+async function checkTsUpdate() {
+  tsCheckingUpdate.value = true
+  try {
+    const r = await axios.get('/api/tailscale/check-update')
+    if (r.data.code === 0) {
+      tsRemoteVersion.value = r.data.data.remote_version || ''
+      tsHasUpdate.value = r.data.data.has_update
+      if (!tsHasUpdate.value && tsStatus.installed) {
+        ElMessage.success('已是最新版本')
+      }
+    } else {
+      ElMessage.error(r.data.msg || '检查更新失败')
+    }
+  } catch (e: any) {
+    ElMessage.error('检查更新失败: ' + (e.message || e))
+  } finally {
+    tsCheckingUpdate.value = false
+  }
+}
+
 async function installTailscale() {
   tsInstalling.value = true
   tsLog.value = '开始安装 Tailscale...'
   try {
-    const script = [
-      'DIR="/data/plugins/tailscale"',
-      'BIN_DIR="$DIR/bin"',
-      'mkdir -p "$DIR" "$BIN_DIR"',
-      'echo "下载 Tailscale..."',
-      'curl -fsSL --connect-timeout 15 "https://pkgs.tailscale.com/stable/tailscale_latest_arm64.tgz" -o /tmp/tailscale.tgz 2>&1 || { echo "下载失败"; exit 1; }',
-      'echo "解压..."',
-      'tar -xzf /tmp/tailscale.tgz -C /tmp/ 2>&1',
-      'cp /tmp/tailscale_*/tailscale "$BIN_DIR/" 2>&1',
-      'cp /tmp/tailscale_*/tailscaled "$BIN_DIR/" 2>&1',
-      'chmod +x "$BIN_DIR/tailscale" "$BIN_DIR/tailscaled"',
-      '"$BIN_DIR/tailscale" version 2>/dev/null | head -n 1',
-      'rm -rf /tmp/tailscale.tgz /tmp/tailscale_*',
-      'echo "安装完成"',
-    ].join('\n')
-    const r = await execLocalCmd(script, 120)
-    tsLog.value = (r.data || '').trim()
-    if (r.code === 0 && /安装完成/.test(tsLog.value)) {
-      ElMessage.success('Tailscale 安装成功')
+    const r = await axios.post('/api/tailscale/install', { action: 'install' })
+    if (r.data.code === 0) {
+      tsLog.value = r.data.data.output || ''
+      ElMessage.success('Tailscale 安装成功' + (r.data.data.version ? ` (${r.data.data.version})` : ''))
       await refreshTsStatus()
+      await checkTsUpdate()
     } else {
-      ElMessage.error('安装失败')
+      tsLog.value = r.data.data?.output || r.data.msg || '安装失败'
+      ElMessage.error(r.data.msg || '安装失败')
     }
   } catch (e: any) {
     tsLog.value = '安装异常: ' + (e.message || e)
     ElMessage.error('安装失败')
   } finally {
     tsInstalling.value = false
+  }
+}
+
+async function updateTailscale() {
+  try {
+    await ElMessageBox.confirm(
+      `将更新 Tailscale 到 ${tsRemoteVersion.value}，更新期间服务会中断。`,
+      '确认更新',
+      { confirmButtonText: '更新', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch { return }
+  tsInstalling.value = true
+  tsLog.value = '开始更新 Tailscale...'
+  try {
+    const r = await axios.post('/api/tailscale/install', { action: 'update' })
+    if (r.data.code === 0) {
+      tsLog.value = r.data.data.output || ''
+      ElMessage.success('Tailscale 更新成功' + (r.data.data.version ? ` (${r.data.data.version})` : ''))
+      tsStatus.version = r.data.data.version || ''
+      tsStatus.running = false
+      tsHasUpdate.value = false
+    } else {
+      tsLog.value = r.data.data?.output || r.data.msg || '更新失败'
+      ElMessage.error(r.data.msg || '更新失败')
+    }
+  } catch (e: any) {
+    tsLog.value = '更新异常: ' + (e.message || e)
+    ElMessage.error('更新失败')
+  } finally {
+    tsInstalling.value = false
+  }
+}
+
+async function uninstallTailscale() {
+  try {
+    await ElMessageBox.confirm(
+      '确定要卸载 Tailscale 吗？所有配置和状态将被删除。',
+      '确认卸载',
+      { confirmButtonText: '卸载', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch { return }
+  tsUninstalling.value = true
+  try {
+    const r = await axios.post('/api/tailscale/uninstall')
+    if (r.data.code === 0) {
+      tsStatus.installed = false
+      tsStatus.running = false
+      tsStatus.version = ''
+      tsStatus.tsIP = ''
+      tsStatus.hostname = ''
+      tsStatus.loginUrl = ''
+      tsRemoteVersion.value = ''
+      tsHasUpdate.value = false
+      ElMessage.success('已卸载')
+    } else {
+      ElMessage.error(r.data.msg || '卸载失败')
+    }
+  } catch (e: any) {
+    ElMessage.error('卸载失败: ' + (e.message || e))
+  } finally {
+    tsUninstalling.value = false
   }
 }
 
@@ -5037,24 +5127,6 @@ async function logoutTailscale() {
     ElMessage.error('登出失败: ' + (e.message || e))
   } finally {
     tsLoading.value = false
-  }
-}
-
-async function uninstallTailscale() {
-  tsUninstalling.value = true
-  try {
-    await execLocalCmd('killall tailscaled 2>/dev/null; rm -rf /data/plugins/tailscale; echo removed', 10)
-    tsStatus.installed = false
-    tsStatus.running = false
-    tsStatus.version = ''
-    tsStatus.tsIP = ''
-    tsStatus.hostname = ''
-    tsStatus.loginUrl = ''
-    ElMessage.success('已卸载')
-  } catch (e: any) {
-    ElMessage.error('卸载失败: ' + (e.message || e))
-  } finally {
-    tsUninstalling.value = false
   }
 }
 

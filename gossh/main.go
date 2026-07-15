@@ -1056,6 +1056,9 @@ func main() {
 		// Tailscale
 		auth.GET("/api/tailscale/autostart", service.TailscaleGetAutostartHandler)
 		auth.POST("/api/tailscale/autostart", service.TailscaleSetAutostartHandler)
+		auth.GET("/api/tailscale/check-update", service.TailscaleCheckUpdateHandler)
+		auth.POST("/api/tailscale/install", service.TailscaleInstallHandler)
+		auth.POST("/api/tailscale/uninstall", service.TailscaleUninstallHandler)
 	}
 
 	address := fmt.Sprintf("%s:%s", config.DefaultConfig.Address, config.DefaultConfig.Port)

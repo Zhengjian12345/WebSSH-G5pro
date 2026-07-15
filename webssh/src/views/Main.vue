@@ -1813,7 +1813,7 @@
             <div class="system-tool-section-title">安装 / 卸载</div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
               <el-button v-if="!frpc.installed" type="primary" size="small" :loading="frpc.loading" @click="installFrpc">安装 frpc</el-button>
-              <el-button v-if="frpc.installed" type="danger" size="small" :loading="frpc.loading" @click="frpcControl('uninstall')">卸载 frpc</el-button>
+              <el-button v-if="frpc.installed" type="danger" size="small" :loading="frpc.loading" @click="uninstallFrpc">卸载 frpc</el-button>
               <el-button size="small" :loading="frpc.loading" @click="checkFrpcRemoteVersion">检查最新版本</el-button>
               <span v-if="frpc.remoteVersion" class="ts-code" style="font-size:12px;margin-left:4px;">最新: {{ frpc.remoteVersion }}</span>
             </div>
@@ -5625,12 +5625,38 @@ async function setFrpcAutostart(val: boolean) {
 async function installFrpc() {
   frpc.loading = true;
   try {
-    const res = await axios.post('/api/frpc/install');
+    const res = await axios.post('/api/frpc/install', { action: 'install' });
     if (res.data.code === 0) {
-      ElMessage.success('frpc 安装成功');
+      ElMessage.success('frpc 安装成功: ' + (res.data.data?.version || ''));
       await loadFrpcStatus();
     } else {
       ElMessage.error(res.data.msg || '安装失败');
+    }
+  } catch (e: any) {
+    ElMessage.error('请求失败: ' + (e.message ?? e));
+  } finally {
+    frpc.loading = false;
+  }
+}
+
+async function uninstallFrpc() {
+  try {
+    await ElMessageBox.confirm(
+      '确定要卸载 frpc 吗？配置文件将被保留。',
+      '确认卸载',
+      { confirmButtonText: '卸载', cancelButtonText: '取消', type: 'warning' }
+    );
+  } catch {
+    return;
+  }
+  frpc.loading = true;
+  try {
+    const res = await axios.post('/api/frpc/install', { action: 'uninstall', mode: 'soft' });
+    if (res.data.code === 0) {
+      ElMessage.success(res.data.msg || '已卸载');
+      await loadFrpcStatus();
+    } else {
+      ElMessage.error(res.data.msg || '卸载失败');
     }
   } catch (e: any) {
     ElMessage.error('请求失败: ' + (e.message ?? e));

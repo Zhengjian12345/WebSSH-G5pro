@@ -206,6 +206,7 @@ func callFrpcAPI(method, apiPath string, body interface{}) (json.RawMessage, err
 }
 
 // downloadFrpc 下载指定版本的 frpc ARM64 tar.gz 到临时目录，解压提取 frpc 二进制并移动到目标目录。
+// 使用 gh-proxy 加速下载，多个代理逐个尝试。
 func downloadFrpc(version string) error {
 	dir := getFrpcDir()
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -215,7 +216,20 @@ func downloadFrpc(version string) error {
 	// 从 version (如 v0.70.0) 提取纯版本号用于文件名
 	versionClean := strings.TrimPrefix(version, "v")
 	archiveName := fmt.Sprintf("frp_%s_linux_arm64.tar.gz", versionClean)
-	downloadURL := fmt.Sprintf("%s/%s/%s", frpcDownloadBase, version, archiveName)
+	originalURL := fmt.Sprintf("%s/%s/%s", frpcDownloadBase, version, archiveName)
+
+	// 构建代理 URL 列表（与 mihomo 使用相同代理）
+	proxies := []string{
+		"https://ghfast.top/",
+		"https://gh-proxy.org/",
+		"https://gh-proxy.com/",
+		"https://gh.llkk.cc/",
+		"https://hub.gitmirror.com/",
+	}
+	tryURLs := []string{originalURL}
+	for _, proxy := range proxies {
+		tryURLs = append(tryURLs, proxy+originalURL)
+	}
 
 	tmpDir, err := os.MkdirTemp("", "frpc-download-*")
 	if err != nil {
@@ -224,14 +238,29 @@ func downloadFrpc(version string) error {
 	defer os.RemoveAll(tmpDir)
 
 	archivePath := filepath.Join(tmpDir, archiveName)
-	slog.Info("[frpc] 开始下载", "url", downloadURL, "dest", archivePath)
+	slog.Info("[frpc] 开始下载", "version", version, "archive", archiveName)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "/bin/sh", "-c",
-		fmt.Sprintf("curl -fsSL --connect-timeout 15 -o '%s' '%s'", archivePath, downloadURL))
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("下载失败: %w, output: %s", err, strings.TrimSpace(string(out)))
+
+	var lastErr error
+	for i, downloadURL := range tryURLs {
+		slog.Info("[frpc] 尝试下载", "url", downloadURL, "attempt", i+1, "total", len(tryURLs))
+		dlCtx, dlCancel := context.WithTimeout(ctx, 60*time.Second)
+		cmd := exec.CommandContext(dlCtx, "/bin/sh", "-c",
+			fmt.Sprintf("curl -fsSL --connect-timeout 15 -o '%s' '%s'", archivePath, downloadURL))
+		out, err := cmd.CombinedOutput()
+		dlCancel()
+		if err != nil {
+			lastErr = fmt.Errorf("%w, output: %s", err, strings.TrimSpace(string(out)))
+			slog.Warn("[frpc] 下载失败", "url", downloadURL, "err", lastErr)
+			continue
+		}
+		lastErr = nil
+		break
+	}
+	if lastErr != nil {
+		return fmt.Errorf("所有线路均下载失败: %w", lastErr)
 	}
 
 	// 验证文件大小

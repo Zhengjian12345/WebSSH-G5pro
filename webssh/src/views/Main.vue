@@ -1754,6 +1754,130 @@
         </div>
       </el-tab-pane>
 
+      <el-tab-pane label="FRP 内网穿透" name="frpc">
+        <div class="system-tool-panel">
+          <!-- 区域 1：总览 + 控制按钮 -->
+          <div class="system-tool-header">
+            <div>
+              <div class="settings-section-title">FRP 内网穿透</div>
+              <div class="system-tool-hint">管理 frpc 客户端，配置内网穿透代理。</div>
+            </div>
+            <el-button size="small" :loading="frpc.loading" @click="loadFrpcStatus">刷新</el-button>
+          </div>
+
+          <section class="system-tool-section">
+            <div class="system-tool-section-title">运行状态</div>
+            <div class="mh-info-grid">
+              <div class="mh-info-item">
+                <span class="mh-info-label">安装状态</span>
+                <span class="mh-info-value" :class="frpc.installed ? 'ts-ok' : 'ts-muted'">{{ frpc.installed ? '已安装' : '未安装' }}</span>
+              </div>
+              <div class="mh-info-item">
+                <span class="mh-info-label">运行状态</span>
+                <span class="mh-info-value" :class="frpc.running ? 'ts-ok' : 'ts-warn'">{{ frpc.running ? '运行中' : '已停止' }}</span>
+              </div>
+              <div class="mh-info-item">
+                <span class="mh-info-label">PID</span>
+                <span class="mh-info-value">{{ frpc.pid || '-' }}</span>
+              </div>
+              <div class="mh-info-item">
+                <span class="mh-info-label">版本</span>
+                <span class="mh-info-value">{{ frpc.version || '-' }}</span>
+              </div>
+              <div class="mh-info-item">
+                <span class="mh-info-label">API 状态</span>
+                <span class="mh-info-value" :class="frpc.apiReachable ? 'ts-ok' : 'ts-warn'">{{ frpc.apiReachable ? '可达' : '不可达' }}</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="system-tool-section">
+            <div class="system-tool-section-title">控制</div>
+            <div class="system-tool-actions">
+              <el-button type="success" size="small" :loading="frpc.controlLoading" :disabled="!frpc.installed || frpc.running" @click="frpcControl('start')">启动</el-button>
+              <el-button type="warning" size="small" :loading="frpc.controlLoading" :disabled="!frpc.installed || !frpc.running" @click="frpcControl('restart')">重启</el-button>
+              <el-button type="danger" size="small" :loading="frpc.controlLoading" :disabled="!frpc.installed || !frpc.running" @click="frpcControl('stop')">停止</el-button>
+              <el-button size="small" :loading="frpc.controlLoading" :disabled="!frpc.installed || !frpc.running" @click="frpcControl('reload')">热重载</el-button>
+            </div>
+          </section>
+
+          <section class="system-tool-section">
+            <div class="system-tool-section-title">自启动</div>
+            <div class="mh-info-item">
+              <span class="mh-info-label">自启动 frpc</span>
+              <el-switch v-model="frpc.autostartEnabled" :loading="frpc.autostartChanging" @change="setFrpcAutostart" active-text="开" inactive-text="关" />
+            </div>
+          </section>
+
+          <section class="system-tool-section">
+            <div class="system-tool-section-title">安装 / 卸载</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+              <el-button v-if="!frpc.installed" type="primary" size="small" :loading="frpc.loading" @click="installFrpc">安装 frpc</el-button>
+              <el-button v-if="frpc.installed" type="danger" size="small" :loading="frpc.loading" @click="frpcControl('uninstall')">卸载 frpc</el-button>
+              <el-button size="small" :loading="frpc.loading" @click="checkFrpcRemoteVersion">检查最新版本</el-button>
+              <span v-if="frpc.remoteVersion" class="ts-code" style="font-size:12px;margin-left:4px;">最新: {{ frpc.remoteVersion }}</span>
+            </div>
+          </section>
+
+          <!-- 区域 2：代理列表 -->
+          <section class="system-tool-section" style="margin-top:12px">
+            <div class="system-tool-section-title" style="display:flex;justify-content:space-between;align-items:center;">
+              <span>代理列表</span>
+              <el-button size="small" type="primary" :disabled="!frpc.installed" @click="frpcAddDialogVisible = true; frpcNewProxy.name = ''; frpcNewProxy.type = 'tcp'; frpcNewProxy.localIP = '127.0.0.1'; frpcNewProxy.localPort = 80; frpcNewProxy.remotePort = 0; frpcNewProxy.customDomains = ''; frpcNewProxy.subdomain = '';">添加代理</el-button>
+            </div>
+            <div v-if="frpc.proxiesLoading" style="text-align:center;padding:16px 0;">
+              <div class="loading-spinner" style="width:24px;height:24px;border-width:2px;margin:0 auto 8px;"></div>
+              <p style="color:rgba(255,255,255,0.6);margin:0;font-size:13px;">加载代理列表...</p>
+            </div>
+            <div v-else-if="frpc.proxies.length === 0" style="text-align:center;padding:16px 0;color:rgba(255,255,255,0.5);font-size:13px;">
+              暂无代理
+            </div>
+            <el-table v-else :data="frpc.proxies" size="small" style="width:100%" max-height="240">
+              <el-table-column prop="name" label="名称" min-width="90" show-overflow-tooltip />
+              <el-table-column prop="type" label="类型" width="70" />
+              <el-table-column label="状态" width="70">
+                <template #default="{ row }">
+                  <span :class="row.status === 'running' ? 'ts-ok' : 'ts-warn'" style="font-size:12px;">{{ row.status === 'running' ? '运行' : '停止' }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="本地地址" min-width="120" show-overflow-tooltip>
+                <template #default="{ row }">{{ row.localIP || '127.0.0.1' }}:{{ row.localPort }}</template>
+              </el-table-column>
+              <el-table-column label="远程地址" min-width="140" show-overflow-tooltip>
+                <template #default="{ row }">
+                  <span v-if="row.customDomains">{{ row.customDomains }}</span>
+                  <span v-else-if="row.subdomain">{{ row.subdomain }}</span>
+                  <span v-else>:{{ row.remotePort }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="60" fixed="right">
+                <template #default="{ row }">
+                  <el-button type="danger" size="small" link @click="deleteFrpcProxy(row.name)">删除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </section>
+
+          <!-- 区域 3：配置文件编辑 -->
+          <section class="system-tool-section" style="margin-top:12px">
+            <div class="system-tool-section-title" style="display:flex;justify-content:space-between;align-items:center;">
+              <span>配置文件 (frpc.toml)</span>
+              <div style="display:flex;gap:6px;">
+                <el-button size="small" :loading="frpc.configSaving" type="primary" @click="saveFrpcConfig">保存</el-button>
+                <el-button size="small" :loading="frpc.controlLoading" @click="frpcControl('reload')">重新加载</el-button>
+              </div>
+            </div>
+            <el-input
+              v-model="frpc.configContent"
+              type="textarea"
+              :autosize="{ minRows: 10, maxRows: 22 }"
+              spellcheck="false"
+              placeholder="# frpc 配置文件内容"
+              style="font-family:monospace;font-size:13px;" />
+          </section>
+        </div>
+      </el-tab-pane>
+
       <el-tab-pane label="Tailscale" name="tailscale">
         <div class="mh-info-grid" style="margin:0 0 12px">
           <div class="mh-info-item">
@@ -1854,6 +1978,44 @@
         <el-button v-else type="primary" @click="startLocalSpeedTest">开始测速</el-button>
       </template>
       <el-button v-else-if="systemToolsActiveTab === 'rcLocal'" type="primary" :loading="rcLocal.saving" @click="saveRcLocal">保存</el-button>
+    </template>
+  </el-dialog>
+
+  <!-- ───────── frpc 添加代理弹窗 ───────── -->
+  <el-dialog v-model="frpcAddDialogVisible" title="添加代理" width="480px" destroy-on-close>
+    <el-form label-width="90px" label-position="left">
+      <el-form-item label="名称">
+        <el-input v-model="frpcNewProxy.name" placeholder="my-proxy" />
+      </el-form-item>
+      <el-form-item label="类型">
+        <el-select v-model="frpcNewProxy.type" style="width:100%">
+          <el-option label="TCP" value="tcp" />
+          <el-option label="UDP" value="udp" />
+          <el-option label="HTTP" value="http" />
+          <el-option label="HTTPS" value="https" />
+          <el-option label="STCP" value="stcp" />
+          <el-option label="SUDP" value="sudp" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="本地 IP">
+        <el-input v-model="frpcNewProxy.localIP" placeholder="127.0.0.1" />
+      </el-form-item>
+      <el-form-item label="本地端口">
+        <el-input-number v-model="frpcNewProxy.localPort" :min="1" :max="65535" style="width:100%" />
+      </el-form-item>
+      <el-form-item label="远程端口">
+        <el-input-number v-model="frpcNewProxy.remotePort" :min="1" :max="65535" style="width:100%" />
+      </el-form-item>
+      <el-form-item label="自定义域名">
+        <el-input v-model="frpcNewProxy.customDomains" placeholder="可选，多个用逗号分隔" />
+      </el-form-item>
+      <el-form-item label="子域名">
+        <el-input v-model="frpcNewProxy.subdomain" placeholder="可选" />
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="frpcAddDialogVisible = false">取消</el-button>
+      <el-button type="primary" :loading="frpc.proxyAdding" @click="addFrpcProxy">添加</el-button>
     </template>
   </el-dialog>
 
@@ -2383,7 +2545,7 @@ const wifiSettingsSummary = computed(() => {
   return wifiSettingsSaving.value ? '应用中...' : `${wifiInfo.value.wifiStatus24 ? '2.4G开' : '2.4G关'} / ${wifiInfo.value.wifiStatus5 ? '5G开' : '5G关'}`;
 });
 
-type SystemToolsTab = 'speedtest' | 'sms' | 'rcLocal' | 'tailscale' | 'simswitch';
+type SystemToolsTab = 'speedtest' | 'sms' | 'rcLocal' | 'frpc' | 'tailscale' | 'simswitch';
 
 interface SmsMessage {
   id: number;
@@ -2457,6 +2619,38 @@ const rcLocal = reactive({
   loaded: false,
   content: '',
   status: '',
+});
+
+// ── frpc 内网穿透 ──
+const frpc = reactive({
+  installed: false,
+  running: false,
+  pid: 0,
+  version: '',
+  apiReachable: false,
+  apiAddr: '',
+  autostartEnabled: false,
+  configExists: false,
+  loading: false,
+  controlLoading: false,
+  configSaving: false,
+  autostartChanging: false,
+  proxies: [] as any[],
+  proxiesLoading: false,
+  proxyAdding: false,
+  remoteVersion: '',
+  configContent: '',
+});
+
+const frpcAddDialogVisible = ref(false);
+const frpcNewProxy = reactive({
+  name: '',
+  type: 'tcp',
+  localIP: '127.0.0.1',
+  localPort: 80,
+  remotePort: 0,
+  customDomains: '',
+  subdomain: '',
 });
 
 const systemToolsSummary = computed(() => {
@@ -5262,12 +5456,218 @@ watch(mmActiveTab, (tab) => {
   }
 })
 
-// 切换到 Tailscale / SIM 切卡 tab 时自动刷新状态
+// ── frpc 内网穿透函数 ──
+
+async function loadFrpcStatus() {
+  frpc.loading = true;
+  try {
+    const res = await axios.get('/api/frpc/status');
+    if (res.data.code === 0) {
+      const d = res.data.data || {};
+      frpc.installed = !!d.installed;
+      frpc.running = !!d.running;
+      frpc.pid = d.pid || 0;
+      frpc.version = d.version || '';
+      frpc.apiReachable = !!d.apiReachable;
+      frpc.apiAddr = d.apiAddr || '';
+      frpc.autostartEnabled = !!d.autostartEnabled;
+      frpc.configExists = !!d.configExists;
+    } else {
+      ElMessage.error(res.data.msg || '获取 frpc 状态失败');
+    }
+  } catch (e: any) {
+    ElMessage.error('请求失败: ' + (e.message ?? e));
+  } finally {
+    frpc.loading = false;
+  }
+}
+
+async function frpcControl(action: string) {
+  frpc.controlLoading = true;
+  try {
+    const res = await axios.post('/api/frpc/control', { action });
+    if (res.data.code === 0) {
+      ElMessage.success(action + ' 成功');
+      await loadFrpcStatus();
+      if (action !== 'uninstall') {
+        loadFrpcProxies();
+        loadFrpcConfig();
+      }
+    } else {
+      ElMessage.error(res.data.msg || action + ' 失败');
+    }
+  } catch (e: any) {
+    ElMessage.error('请求失败: ' + (e.message ?? e));
+  } finally {
+    frpc.controlLoading = false;
+  }
+}
+
+async function loadFrpcProxies() {
+  frpc.proxiesLoading = true;
+  try {
+    const res = await axios.get('/api/frpc/proxies');
+    if (res.data.code === 0) {
+      frpc.proxies = res.data.data || [];
+    } else {
+      ElMessage.error(res.data.msg || '获取代理列表失败');
+    }
+  } catch (e: any) {
+    frpc.proxies = [];
+    ElMessage.error('请求失败: ' + (e.message ?? e));
+  } finally {
+    frpc.proxiesLoading = false;
+  }
+}
+
+async function addFrpcProxy() {
+  if (!frpcNewProxy.name.trim()) {
+    ElMessage.warning('请填写代理名称');
+    return;
+  }
+  frpc.proxyAdding = true;
+  try {
+    const payload: any = {
+      name: frpcNewProxy.name.trim(),
+      type: frpcNewProxy.type,
+      localIP: frpcNewProxy.localIP || '127.0.0.1',
+      localPort: frpcNewProxy.localPort,
+      remotePort: frpcNewProxy.remotePort,
+    };
+    if (frpcNewProxy.customDomains) payload.customDomains = frpcNewProxy.customDomains;
+    if (frpcNewProxy.subdomain) payload.subdomain = frpcNewProxy.subdomain;
+    const res = await axios.post('/api/frpc/proxies', payload);
+    if (res.data.code === 0) {
+      ElMessage.success('代理添加成功');
+      frpcAddDialogVisible.value = false;
+      await loadFrpcProxies();
+      await loadFrpcConfig();
+    } else {
+      ElMessage.error(res.data.msg || '添加代理失败');
+    }
+  } catch (e: any) {
+    ElMessage.error('请求失败: ' + (e.message ?? e));
+  } finally {
+    frpc.proxyAdding = false;
+  }
+}
+
+async function deleteFrpcProxy(name: string) {
+  try {
+    await ElMessageBox.confirm(`确定要删除代理「${name}」吗？`, '删除确认', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    });
+  } catch {
+    return; // 用户取消
+  }
+  try {
+    const res = await axios.delete('/api/frpc/proxies', { data: { name } });
+    if (res.data.code === 0) {
+      ElMessage.success('已删除');
+      await loadFrpcProxies();
+      await loadFrpcConfig();
+    } else {
+      ElMessage.error(res.data.msg || '删除失败');
+    }
+  } catch (e: any) {
+    ElMessage.error('请求失败: ' + (e.message ?? e));
+  }
+}
+
+async function loadFrpcConfig() {
+  try {
+    const res = await axios.get('/api/frpc/config');
+    if (res.data.code === 0) {
+      frpc.configContent = res.data.data || '';
+    }
+  } catch (e: any) {
+    // 静默失败，配置内容保留原样
+  }
+}
+
+async function saveFrpcConfig() {
+  frpc.configSaving = true;
+  try {
+    const res = await axios.put('/api/frpc/config', { content: frpc.configContent });
+    if (res.data.code === 0) {
+      ElMessage.success('配置已保存');
+    } else {
+      ElMessage.error(res.data.msg || '保存失败');
+    }
+  } catch (e: any) {
+    ElMessage.error('请求失败: ' + (e.message ?? e));
+  } finally {
+    frpc.configSaving = false;
+  }
+}
+
+async function setFrpcAutostart(val: boolean) {
+  frpc.autostartChanging = true;
+  try {
+    const res = await axios.post('/api/frpc/autostart', { enabled: val });
+    if (res.data.code === 0) {
+      frpc.autostartEnabled = val;
+      ElMessage.success(val ? '已开启自启动' : '已关闭自启动');
+    } else {
+      ElMessage.error(res.data.msg || '设置失败');
+      frpc.autostartEnabled = !val;
+    }
+  } catch (e: any) {
+    ElMessage.error('请求失败: ' + (e.message ?? e));
+    frpc.autostartEnabled = !val;
+  } finally {
+    frpc.autostartChanging = false;
+  }
+}
+
+async function installFrpc() {
+  frpc.loading = true;
+  try {
+    const res = await axios.post('/api/frpc/install');
+    if (res.data.code === 0) {
+      ElMessage.success('frpc 安装成功');
+      await loadFrpcStatus();
+    } else {
+      ElMessage.error(res.data.msg || '安装失败');
+    }
+  } catch (e: any) {
+    ElMessage.error('请求失败: ' + (e.message ?? e));
+  } finally {
+    frpc.loading = false;
+  }
+}
+
+async function checkFrpcRemoteVersion() {
+  frpc.loading = true;
+  try {
+    const res = await axios.get('/api/frpc/remote-version');
+    if (res.data.code === 0) {
+      frpc.remoteVersion = res.data.data || '';
+      if (frpc.remoteVersion) {
+        ElMessage.success('最新版本: ' + frpc.remoteVersion);
+      }
+    } else {
+      ElMessage.error(res.data.msg || '获取版本失败');
+    }
+  } catch (e: any) {
+    ElMessage.error('请求失败: ' + (e.message ?? e));
+  } finally {
+    frpc.loading = false;
+  }
+}
+
+// 切换到 Tailscale / SIM 切卡 / frpc tab 时自动刷新状态
 watch(systemToolsActiveTab, (tab) => {
   if (tab === 'tailscale') {
     refreshTsStatus()
   } else if (tab === 'simswitch') {
     refreshSimStatus()
+  } else if (tab === 'frpc') {
+    loadFrpcStatus()
+    loadFrpcProxies()
+    loadFrpcConfig()
   }
 })
 

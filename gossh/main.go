@@ -842,6 +842,7 @@ func initApplication() {
 	service.InitSessionClean()
 	service.InitSshServer()
 	service.InitMihomoAutostart()
+	service.InitFrpcAutostart()
 	service.InitTailscaleAutostart()
 	service.InitSmsForwardAutostart()
 	service.InitWifiSettingsAutostart()
@@ -1041,6 +1042,17 @@ func main() {
 		// 开机自启
 		auth.GET("/api/mihomo/autostart", service.MihomoGetAutostartHandler)
 		auth.POST("/api/mihomo/autostart", service.MihomoSetAutostartHandler)
+		// frpc
+		auth.GET("/api/frpc/status", service.FrpcStatusHandler)
+		auth.POST("/api/frpc/control", service.FrpcControlHandler)
+		auth.GET("/api/frpc/config", service.FrpcGetConfigHandler)
+		auth.PUT("/api/frpc/config", service.FrpcSaveConfigHandler)
+		auth.GET("/api/frpc/autostart", service.FrpcGetAutostartHandler)
+		auth.POST("/api/frpc/autostart", service.FrpcSetAutostartHandler)
+		auth.GET("/api/frpc/proxies", service.FrpcGetProxiesHandler)
+		auth.POST("/api/frpc/proxies", service.FrpcSetProxyHandler)
+		auth.GET("/api/frpc/binary/version", service.FrpcCheckBinaryVersionHandler)
+		auth.POST("/api/frpc/install", service.FrpcInstallHandler)
 		// Tailscale
 		auth.GET("/api/tailscale/autostart", service.TailscaleGetAutostartHandler)
 		auth.POST("/api/tailscale/autostart", service.TailscaleSetAutostartHandler)

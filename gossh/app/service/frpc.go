@@ -361,17 +361,18 @@ func stopFrpc() error {
 		return fmt.Errorf("解析 PID 失败: %w", err)
 	}
 
+	// 检查进程是否存在
+	if _, statErr := os.Stat(fmt.Sprintf("/proc/%d", pid)); statErr != nil {
+		_ = os.Remove(pidFile)
+		return nil
+	}
+
 	// 发送 SIGTERM
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return fmt.Errorf("查找进程失败: %w", err)
 	}
-	if err := proc.Signal(nil); err != nil {
-		// 进程不存在
-		_ = os.Remove(pidFile)
-		return nil
-	}
-	if err := proc.Terminate(); err != nil {
+	if err := exec.Command("kill", "-TERM", fmt.Sprintf("%d", pid)).Run(); err != nil {
 		return fmt.Errorf("终止进程失败: %w", err)
 	}
 

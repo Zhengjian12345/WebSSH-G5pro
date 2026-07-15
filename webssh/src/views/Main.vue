@@ -1692,6 +1692,23 @@
               <el-input v-model="smsForward.tgBotToken" placeholder="Bot Token" clearable show-password />
               <el-input v-model="smsForward.tgChatId" placeholder="Chat ID" clearable />
             </section>
+            <section class="system-tool-section">
+              <div class="system-tool-section-title">企业微信</div>
+              <el-switch v-model="smsForward.wecomEnabled" active-text="启用" inactive-text="关闭" />
+              <el-input v-model="smsForward.wecomWebhook" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..." clearable />
+            </section>
+            <section class="system-tool-section">
+              <div class="system-tool-section-title">Plus Push</div>
+              <el-switch v-model="smsForward.plusEnabled" active-text="启用" inactive-text="关闭" />
+              <el-input v-model="smsForward.plusToken" placeholder="Token（在 pushplus.plus 获取）" clearable show-password />
+              <el-input v-model="smsForward.plusTopic" placeholder="群组编码（可选）" clearable />
+              <el-select v-model="smsForward.plusTemplate" style="width:100%">
+                <el-option label="HTML" value="html" />
+                <el-option label="JSON" value="json" />
+                <el-option label="Markdown" value="markdown" />
+                <el-option label="TXT" value="txt" />
+              </el-select>
+            </section>
           </div>
           <div class="system-tool-actions">
             <el-button size="small" :loading="smsForward.loading" @click="loadSmsMessages">刷新短信</el-button>
@@ -2615,6 +2632,12 @@ const smsForward = reactive({
   tgEnabled: false,
   tgBotToken: '',
   tgChatId: '',
+  wecomEnabled: false,
+  wecomWebhook: '',
+  plusEnabled: false,
+  plusToken: '',
+  plusTopic: '',
+  plusTemplate: 'html',
   lastId: 0,
   running: false,
   autostartEnabled: false,
@@ -2821,8 +2844,8 @@ async function loadSmsMessages() {
 }
 
 function validateSmsForwardTarget() {
-  if (!smsForward.barkEnabled && !smsForward.tgEnabled) {
-    ElMessage.warning('请至少启用 Bark 或 TG Bot');
+  if (!smsForward.barkEnabled && !smsForward.tgEnabled && !smsForward.wecomEnabled && !smsForward.plusEnabled) {
+    ElMessage.warning('请至少启用一个推送渠道');
     return false;
   }
   if (smsForward.barkEnabled && !String(smsForward.barkUrl || '').trim()) {
@@ -2849,9 +2872,15 @@ async function loadSmsForwardStatus() {
     smsForward.barkUrl = config.bark_url || '';
     smsForward.barkGroup = config.bark_group || '';
     smsForward.tgEnabled = !!config.tg_enabled;
-    smsForward.tgBotToken = config.tg_bot_token || '';
-    smsForward.tgChatId = config.tg_chat_id || '';
-    smsForward.lastId = Number(data.last_id || config.last_id || 0);
+      smsForward.tgBotToken = config.tg_bot_token || '';
+      smsForward.tgChatId = config.tg_chat_id || '';
+      smsForward.wecomEnabled = !!config.wecom_enabled;
+      smsForward.wecomWebhook = config.wecom_webhook || '';
+      smsForward.plusEnabled = !!config.plus_enabled;
+      smsForward.plusToken = config.plus_token || '';
+      smsForward.plusTopic = config.plus_topic || '';
+      smsForward.plusTemplate = config.plus_template || 'html';
+      smsForward.lastId = Number(data.last_id || config.last_id || 0);
     smsForward.running = !!data.running;
     smsForward.autostartEnabled = !!data.autostart_enabled;
     smsForward.pollInterval = Number(data.poll_interval || 3);
@@ -2876,6 +2905,12 @@ async function saveSmsForwardConfig(showMessage = true) {
       tg_enabled: smsForward.tgEnabled,
       tg_bot_token: smsForward.tgBotToken,
       tg_chat_id: smsForward.tgChatId,
+      wecom_enabled: smsForward.wecomEnabled,
+      wecom_webhook: smsForward.wecomWebhook,
+      plus_enabled: smsForward.plusEnabled,
+      plus_token: smsForward.plusToken,
+      plus_topic: smsForward.plusTopic,
+      plus_template: smsForward.plusTemplate,
       last_id: smsForward.lastId,
     });
     if (res.data.code !== 0) {
@@ -2907,6 +2942,12 @@ async function forwardSms(onlyLatest: boolean) {
       tg_enabled: smsForward.tgEnabled,
       tg_bot_token: smsForward.tgBotToken,
       tg_chat_id: smsForward.tgChatId,
+      wecom_enabled: smsForward.wecomEnabled,
+      wecom_webhook: smsForward.wecomWebhook,
+      plus_enabled: smsForward.plusEnabled,
+      plus_token: smsForward.plusToken,
+      plus_topic: smsForward.plusTopic,
+      plus_template: smsForward.plusTemplate,
       last_id: onlyLatest ? 0 : smsForward.lastId,
       only_latest: onlyLatest,
     });

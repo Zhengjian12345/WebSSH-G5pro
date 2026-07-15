@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -48,7 +49,13 @@ type smsForwardConfig struct {
 	TgEnabled   bool   `json:"tg_enabled"`
 	TgBotToken  string `json:"tg_bot_token"`
 	TgChatID    string `json:"tg_chat_id"`
-	LastID      int    `json:"last_id"`
+	WecomEnabled bool   `json:"wecom_enabled"`
+	WecomWebhook string `json:"wecom_webhook"`
+	PlusEnabled  bool   `json:"plus_enabled"`
+	PlusToken    string `json:"plus_token"`
+	PlusTopic    string `json:"plus_topic"`
+	PlusTemplate string `json:"plus_template"`
+	LastID       int    `json:"last_id"`
 }
 
 type smsForwardRuntimeStatus struct {
@@ -168,15 +175,21 @@ func SystemSmsForwardAutostartHandler(c *gin.Context) {
 
 func SystemSmsForwardHandler(c *gin.Context) {
 	type body struct {
-		BarkEnabled bool   `json:"bark_enabled"`
-		BarkURL     string `json:"bark_url"`
-		BarkGroup   string `json:"bark_group"`
-		TgEnabled   bool   `json:"tg_enabled"`
-		TgBotToken  string `json:"tg_bot_token"`
-		TgChatID    string `json:"tg_chat_id"`
-		LastID      int    `json:"last_id"`
-		OnlyLatest  bool   `json:"only_latest"`
-		DryRun      bool   `json:"dry_run"`
+		BarkEnabled  bool   `json:"bark_enabled"`
+		BarkURL      string `json:"bark_url"`
+		BarkGroup    string `json:"bark_group"`
+		TgEnabled    bool   `json:"tg_enabled"`
+		TgBotToken   string `json:"tg_bot_token"`
+		TgChatID     string `json:"tg_chat_id"`
+		WecomEnabled bool   `json:"wecom_enabled"`
+		WecomWebhook string `json:"wecom_webhook"`
+		PlusEnabled  bool   `json:"plus_enabled"`
+		PlusToken    string `json:"plus_token"`
+		PlusTopic    string `json:"plus_topic"`
+		PlusTemplate string `json:"plus_template"`
+		LastID       int    `json:"last_id"`
+		OnlyLatest   bool   `json:"only_latest"`
+		DryRun       bool   `json:"dry_run"`
 	}
 	var req body
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -228,6 +241,22 @@ func SystemSmsForwardHandler(c *gin.Context) {
 		if req.TgEnabled {
 			if err := sendTelegram(req.TgBotToken, req.TgChatID, text); err != nil {
 				errs = append(errs, "TG: "+err.Error())
+			} else {
+				msgSent++
+				sent++
+			}
+		}
+		if req.WecomEnabled {
+			if err := sendWecom(req.WecomWebhook, title, msg.Content); err != nil {
+				errs = append(errs, "企微: "+err.Error())
+			} else {
+				msgSent++
+				sent++
+			}
+		}
+		if req.PlusEnabled {
+			if err := sendPlusPush(req.PlusToken, title, msg.Content, req.PlusTopic, req.PlusTemplate); err != nil {
+				errs = append(errs, "Plus: "+err.Error())
 			} else {
 				msgSent++
 				sent++
@@ -482,6 +511,20 @@ func sendSmsForwardBatch(cfg smsForwardConfig, batch *smsForwardPendingBatch) (i
 			sent++
 		}
 	}
+	if cfg.WecomEnabled {
+		if err := sendWecom(cfg.WecomWebhook, title, msg.Content); err != nil {
+			errs = append(errs, "企微: "+err.Error())
+		} else {
+			sent++
+		}
+	}
+	if cfg.PlusEnabled {
+		if err := sendPlusPush(cfg.PlusToken, title, msg.Content, cfg.PlusTopic, cfg.PlusTemplate); err != nil {
+			errs = append(errs, "Plus: "+err.Error())
+		} else {
+			sent++
+		}
+	}
 	return sent, errs
 }
 
@@ -537,14 +580,20 @@ func saveSmsForwardConfig(cfg smsForwardConfig) error {
 }
 
 func validateSmsForwardConfig(cfg smsForwardConfig) error {
-	if !cfg.BarkEnabled && !cfg.TgEnabled {
-		return errors.New("请至少启用 Bark 或 TG Bot")
+	if !cfg.BarkEnabled && !cfg.TgEnabled && !cfg.WecomEnabled && !cfg.PlusEnabled {
+		return errors.New("请至少启用一个推送渠道（Bark / TG / 企微 / Plus Push）")
 	}
 	if cfg.BarkEnabled && strings.TrimSpace(cfg.BarkURL) == "" {
 		return errors.New("请填写 Bark 地址")
 	}
 	if cfg.TgEnabled && (strings.TrimSpace(cfg.TgBotToken) == "" || strings.TrimSpace(cfg.TgChatID) == "") {
 		return errors.New("请填写 TG Bot Token 和 Chat ID")
+	}
+	if cfg.WecomEnabled && strings.TrimSpace(cfg.WecomWebhook) == "" {
+		return errors.New("请填写企业微信 Webhook 地址")
+	}
+	if cfg.PlusEnabled && strings.TrimSpace(cfg.PlusToken) == "" {
+		return errors.New("请填写 Plus Push Token")
 	}
 	return nil
 }
@@ -744,6 +793,52 @@ func sendTelegram(token string, chatID string, text string) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return notifyRequest(req)
+}
+
+// sendWecom 通过企业微信机器人 Webhook 推送消息。
+func sendWecom(webhookURL string, title string, content string) error {
+	webhookURL = strings.TrimSpace(webhookURL)
+	if webhookURL == "" {
+		return fmt.Errorf("企业微信 Webhook 地址为空")
+	}
+	payload := map[string]interface{}{
+		"msgtype": "markdown",
+		"markdown": map[string]string{
+			"content": fmt.Sprintf("## %s\n> %s", title, strings.ReplaceAll(content, "\n", "\n> ")),
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("序列化失败: %w", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, webhookURL, bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	return notifyRequest(req)
+}
+
+// sendPlusPush 通过 Plus Push (pushplus.plus) 推送消息。
+func sendPlusPush(token string, title string, content string, topic string, template string) error {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return fmt.Errorf("Plus Push Token 为空")
+	}
+	params := url.Values{}
+	params.Set("token", token)
+	params.Set("title", title)
+	params.Set("content", content)
+	params.Set("template", template)
+	if topic = strings.TrimSpace(topic); topic != "" {
+		params.Set("topic", topic)
+	}
+	reqURL := "https://www.pushplus.plus/send?" + params.Encode()
+	req, err := http.NewRequest(http.MethodGet, reqURL, nil)
+	if err != nil {
+		return err
+	}
 	return notifyRequest(req)
 }
 

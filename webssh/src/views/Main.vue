@@ -1180,7 +1180,7 @@
           <el-button :icon="RefreshIcon" @click="loadMmStatus" :loading="mmLoadingStatus">刷新</el-button>
         </div>
         <transition name="el-fade-in">
-          <pre v-if="mmControlOutput" class="mh-output">{{ mmControlOutput }}</pre>
+          <pre v-if="mmControlOutput" ref="mmControlOutputEl" class="mh-output">{{ mmControlOutput }}</pre>
         </transition>
 
         <!-- 开机自启 -->
@@ -1343,6 +1343,20 @@
     :close-on-click-modal="true"
     class="wireless-dialog">
     <div class="settings-panel">
+      <section class="settings-section network-airplane-section">
+        <div class="network-airplane-copy">
+          <div class="settings-section-title">飞行模式</div>
+        </div>
+        <div class="network-airplane-control">
+          <el-switch
+            :model-value="airplaneMode.enabled"
+            :loading="airplaneMode.loading || networkApplying === 'airplane'"
+            active-text="开"
+            inactive-text="关"
+            @change="(val: string | number | boolean) => setAirplaneMode(Boolean(val))" />
+        </div>
+      </section>
+
       <section class="settings-section">
         <div class="settings-section-title">网络制式</div>
         <div class="settings-inline network-mode-row">
@@ -2163,7 +2177,7 @@ import NetworkIcon from '@/assets/svgs/network.svg';
 import { Refresh as RefreshIcon } from '@element-plus/icons-vue';
 import axios from 'axios';
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus';
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 
 // interface UbusResponse<T = any> {
 //   code: number;
@@ -2521,7 +2535,7 @@ const wifiTxPowerOptions = [
   { value: 100, label: '远距离' },
 ];
 
-type NetworkApplyTarget = '' | 'mode' | 'lteBand' | 'nrBand' | 'lteCell' | 'nrCell';
+type NetworkApplyTarget = '' | 'airplane' | 'mode' | 'lteBand' | 'nrBand' | 'lteCell' | 'nrCell';
 type WifiApplyTarget = '' | 'radio24' | 'radio5' | 'psm' | 'txpower' | 'country' | 'thermal' | 'settings' | 'all' | 'mlo' | 'lbd' | 'beamforming';
 
 interface DeviceSettings {
@@ -2553,6 +2567,12 @@ const networkForm = reactive({
   lock_nr_band: '',
 });
 
+const airplaneMode = reactive({
+  enabled: false,
+  loading: false,
+  status: '',
+});
+
 const wifiForm = reactive({
   high_performance: false,
   wifi24_enabled: false,
@@ -2571,6 +2591,7 @@ function normalizeWifiTxPower(value: unknown): number {
 }
 
 const networkSettingsSummary = computed(() => {
+  if (airplaneMode.enabled) return '飞行模式';
   const opt = netSelectOptions.find(item => item.value === (networkForm.net_select || d.value?.net_select));
   return opt?.label || '点击配置';
 });
@@ -3459,6 +3480,22 @@ const usbStatusRequest = {
   ],
 };
 
+const airplaneModeRequest = {
+  jsonrpc: '2.0',
+  id: 17,
+  method: 'call',
+  params: [
+    SESSION_ID,
+    'uci',
+    'get',
+    {
+      config: 'zte_nwinfo',
+      section: 'sys_info',
+      option: 'operate_mode',
+    },
+  ],
+};
+
 // 1.网络信息 => netInfoRequest
 // 2.LAN 状态 => lanRequest
 // 3.WAN IPv4 => wanRequest
@@ -3485,6 +3522,7 @@ const batchRequests = [
   usbStatusRequest,
   wwanRequest,
   lanUserListRequest,
+  airplaneModeRequest,
 ]
 
 
@@ -3771,6 +3809,7 @@ async function openNetworkSettingsDialog() {
   await fetchAllData();
   syncNetworkFormFromCurrent();
   networkSettingsDialogVisible.value = true;
+  loadAirplaneMode();
 }
 
 function openWifiSettingsDialog() {
@@ -3852,6 +3891,59 @@ async function applyNetworkMode() {
   } catch (err: any) {
     console.error('模式切换失败', err);
     ElMessage.error(err.message || '模式切换失败');
+  } finally {
+    networkApplying.value = '';
+  }
+}
+
+function applyAirplaneModeValue(value: unknown) {
+  const mode = String(value || '').toUpperCase();
+  airplaneMode.enabled = mode === 'OFFLINE' || mode === 'LOW_POWER' || mode === '0';
+  airplaneMode.status = mode ? `operate_mode=${mode}` : '';
+}
+
+async function loadAirplaneMode() {
+  airplaneMode.loading = true;
+  try {
+    const resultMap = await callUbusBatch([{
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'call',
+      params: [SESSION_ID, 'uci', 'get', {
+        config: 'zte_nwinfo',
+        section: 'sys_info',
+        option: 'operate_mode',
+      }],
+    }]);
+    applyAirplaneModeValue(resultMap[1]?.value);
+  } catch (err: any) {
+    airplaneMode.status = '读取飞行模式状态失败: ' + (err?.message ?? err);
+  } finally {
+    airplaneMode.loading = false;
+  }
+}
+
+async function setAirplaneMode(enabled: boolean) {
+  const previous = airplaneMode.enabled;
+  airplaneMode.enabled = enabled;
+  networkApplying.value = 'airplane';
+  airplaneMode.status = enabled ? '正在开启飞行模式...' : '正在关闭飞行模式...';
+  try {
+    await callUbusBatch([{
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'call',
+      params: [SESSION_ID, 'zte_nwinfo_api', 'nwinfo_set_mode', {
+        operate_mode: enabled ? '0' : '1',
+      }],
+    }]);
+    applyAirplaneModeValue(enabled ? 'OFFLINE' : 'ONLINE');
+    ElMessage.success(enabled ? '飞行模式已开启' : '飞行模式已关闭');
+    setTimeout(fetchAllData, enabled ? 1000 : 3000);
+  } catch (err: any) {
+    airplaneMode.enabled = previous;
+    airplaneMode.status = err.message || '飞行模式切换失败';
+    ElMessage.error(airplaneMode.status);
   } finally {
     networkApplying.value = '';
   }
@@ -4518,6 +4610,7 @@ async function doFetchAllData() {
     wifiStatus.value = resultMap[14]
     sysVersion.value = resultMap[15]?.values ?? sysVersion.value
     usbStatus.value = resultMap[16] ?? usbStatus.value
+    if (resultMap[17]) applyAirplaneModeValue(resultMap[17].value)
     connectionOk.value = true
   } catch (e: any) {
     connectionOk.value = false
@@ -5459,6 +5552,8 @@ const mmActiveTab = ref('overview')
 const mmLoadingStatus = ref(false)
 const mmControlling = ref('')
 const mmControlOutput = ref('')
+const mmControlOutputEl = ref<HTMLElement | null>(null)
+let mmControlSource: EventSource | null = null
 const mmCheckingVersion = ref(false)
 const mmBinaryChecking = ref(false)
 const mmConfigLoading = ref(false)
@@ -5885,22 +5980,61 @@ watch(systemToolsActiveTab, (tab) => {
 })
 
 async function mmControl(action: string) {
+  stopMmControlStream()
   mmControlling.value = action
-  mmControlOutput.value = ''
-  try {
-    const res = await axios.post('/api/mihomo/control', { action })
-    if (res.data.code === 0) {
+  mmControlOutput.value = '正在执行...\n'
+  const params = new URLSearchParams({
+    action,
+    Authorization: localStorage.getItem('token') ?? '',
+  })
+  mmControlSource = new EventSource(`/api/mihomo/control/stream?${params.toString()}`)
+
+  mmControlSource.addEventListener('line', (event: MessageEvent) => {
+    const data = JSON.parse(event.data)
+    mmControlOutput.value += `${data.line}\n`
+    scrollMmControlOutputToBottom()
+  })
+
+  mmControlSource.addEventListener('done', async (event: MessageEvent) => {
+    const data = JSON.parse(event.data)
+    mmControlling.value = ''
+    stopMmControlStream()
+    mmControlOutput.value = mmControlOutput.value.trim()
+    if (data.code === 0) {
       ElMessage.success(action + ' 成功')
-      mmControlOutput.value = (res.data.output ?? '').trim()
     } else {
-      ElMessage.error(res.data.msg)
-      mmControlOutput.value = (res.data.output ?? res.data.msg ?? '').trim()
+      ElMessage.error(data.msg ?? '执行失败')
+      if (!mmControlOutput.value && data.output) {
+        mmControlOutput.value = data.output
+      } else if (data.msg && !mmControlOutput.value.includes(data.msg)) {
+        mmControlOutput.value += `\n${data.msg}`
+        scrollMmControlOutputToBottom()
+      }
     }
     await loadMmStatus()
-  } catch (e: any) {
-    ElMessage.error('请求失败: ' + (e.message ?? e))
-  } finally {
-    mmControlling.value = ''
+  })
+
+  mmControlSource.onerror = async () => {
+    stopMmControlStream()
+    if (mmControlling.value) {
+      ElMessage.error('实时日志连接中断')
+      await loadMmStatus()
+      mmControlling.value = ''
+    }
+  }
+}
+
+function stopMmControlStream() {
+  if (mmControlSource) {
+    mmControlSource.close()
+    mmControlSource = null
+  }
+}
+
+async function scrollMmControlOutputToBottom() {
+  await nextTick()
+  if (mmControlOutputEl.value) {
+    mmControlOutputEl.value.scrollTop = mmControlOutputEl.value.scrollHeight
   }
 }
 
@@ -6131,6 +6265,7 @@ async function uninstallMm(mode: string) {
 function stopMmAllPolls() {
   stopMmUpdatePoll()
   stopMmInstallPoll()
+  stopMmControlStream()
 }
 
 function formatMmSize(bytes: number): string {
@@ -6485,6 +6620,10 @@ watch([deviceDialogVisible, mmDialogVisible, networkSettingsDialogVisible, wifiS
 // 关闭「已连接设备」弹窗时停止每秒刷新（按钮 / 点遮罩 / ESC 都会触发）
 watch(deviceDialogVisible, (open) => {
   if (!open) stopDeviceRfRefresh();
+});
+
+watch(mmDialogVisible, (open) => {
+  if (!open) stopMmControlStream();
 });
 
 watch(systemToolsActiveTab, (tab) => {
@@ -9511,6 +9650,17 @@ onUnmounted(() => {
   border-radius: 8px;
   padding: 14px;
   background: rgba(255, 255, 255, 0.05);
+}
+
+.network-airplane-section {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.network-airplane-copy {
+  min-width: 0;
 }
 
 .settings-section-title {

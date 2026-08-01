@@ -3,18 +3,115 @@
   <head>
     <meta charset="UTF-8">
     <link rel="icon" href="/favicon.ico">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="manifest" href="manifest.webmanifest">
+    <link rel="apple-touch-icon" href="apple-touch-icon.png">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#315697">
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0f172a">
+    <meta name="color-scheme" content="light dark">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="WebSSH">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>WebSSH for G5 Pro</title>
     <style>
+      :root {
+        --app-safe-top: env(safe-area-inset-top, 0px);
+        --app-safe-right: env(safe-area-inset-right, 0px);
+        --app-safe-bottom: env(safe-area-inset-bottom, 0px);
+        --app-safe-left: env(safe-area-inset-left, 0px);
+      }
+      html.ios-pwa {
+        box-sizing: border-box;
+        --app-safe-top: 0px;
+        --app-safe-bottom: 0px;
+        background: #315697;
+      }
+
+      html.ios-pwa body {
+        height: auto;
+        min-height: 100dvh;
+        padding-top: env(safe-area-inset-top, 0px);
+        box-sizing: border-box;
+        background: #315697;
+      }
+
+      html.ios-pwa body::before {
+        content: "";
+        position: fixed;
+        top: 0;
+        right: 0;
+        left: 0;
+        height: env(safe-area-inset-top, 0px);
+        background: #315697;
+        pointer-events: none;
+        z-index: 3000;
+      }
+
+      html.ios-pwa #app {
+        height: auto;
+        min-height: calc(100dvh - env(safe-area-inset-top, 0px));
+      }
+
+      html.ios-pwa input,
+      html.ios-pwa textarea,
+      html.ios-pwa select,
+      html.ios-pwa .el-input__inner,
+      html.ios-pwa .el-textarea__inner,
+      html.ios-pwa .el-select__input {
+        font-size: 16px !important;
+      }
+
+      html.ios-pwa .el-select__selected-item,
+      html.ios-pwa .el-select__placeholder {
+        font-size: inherit;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        html.ios-pwa {
+          background: #0f172a;
+        }
+
+        html.ios-pwa body,
+        html.ios-pwa body::before {
+          background: #263144;
+        }
+      }
+
       html,
       body,
       #app {
         height: 100%;
+        min-height: 100dvh;
         margin: 0px;
         padding: 0px;
         font-family: "Helvetica Neue", Helvetica, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "微软雅黑", Arial, sans-serif;
       }
+
+      html {
+        background: #315697;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        html {
+          background: #0f172a;
+        }
+      }
+
+      body {
+        overflow-x: hidden;
+        overscroll-behavior-y: none;
+        -webkit-tap-highlight-color: transparent;
+      }
     </style>
+    <script>
+      if (navigator.standalone) {
+        document.documentElement.classList.add("ios-pwa");
+        document
+          .querySelector('meta[name="viewport"]')
+          ?.setAttribute("content", "width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover");
+      }
+    </script>
   </head>
 
   <body>

@@ -10,6 +10,17 @@ import router from "./router";
 
 import { useGlobalStore } from "./stores/store";
 
+function isIOSStandalonePwa() {
+    const standalone = Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
+    const iosDevice = /iPad|iPhone|iPod/.test(navigator.userAgent);
+    const iPadDesktopMode = navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
+    return standalone && (iosDevice || iPadDesktopMode);
+}
+
+if (isIOSStandalonePwa()) {
+    document.documentElement.classList.add("ios-pwa");
+}
+
 const app = createApp(App);
 
 const pinia = createPinia();
@@ -93,3 +104,11 @@ axios.interceptors.response.use(
 )
 
 app.mount("#app");
+
+if ("serviceWorker" in navigator && import.meta.env.PROD) {
+    window.addEventListener("load", () => {
+        navigator.serviceWorker.register(new URL("sw.js", window.location.href), { scope: "./" }).catch((err) => {
+            console.warn("Service worker registration failed:", err);
+        });
+    });
+}

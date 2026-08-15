@@ -916,6 +916,10 @@ func main() {
 		auth.GET("/api/system/rc-local", service.SystemRcLocalGetHandler)
 		auth.PUT("/api/system/rc-local", service.SystemRcLocalSaveHandler)
 		auth.POST("/api/system/exec", service.SystemExecHandler)
+		auth.GET("/api/system/hosts", service.HostsGetHandler)
+		auth.PUT("/api/system/hosts", service.HostsSaveHandler)
+		auth.POST("/api/system/hosts/restore", service.HostsRestoreHandler)
+		auth.POST("/api/system/hosts/reload-dns", service.HostsReloadDnsmasqHandler)
 	}
 
 	{ // SSH 连接配置

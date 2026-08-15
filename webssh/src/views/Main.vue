@@ -2018,6 +2018,63 @@
         <el-button :loading="simRefreshing" @click="refreshSimStatus" style="width:100%;">刷新网络状态</el-button>
         <pre v-if="simLog" class="sim-log" style="margin-top:12px">{{ simLog }}</pre>
       </el-tab-pane>
+
+      <el-tab-pane label="Hosts" name="hosts">
+        <div class="system-tool-panel">
+          <div class="system-tool-header">
+            <div>
+              <div class="settings-section-title">Hosts 管理</div>
+              <div class="system-tool-hint">编辑设备本机 /etc/hosts，保存前自动备份，可刷新 DNS 立即生效。</div>
+            </div>
+            <el-button size="small" :loading="hosts.loading" @click="loadHosts">刷新</el-button>
+          </div>
+
+          <div class="hosts-stat-grid" style="margin-bottom:12px">
+            <div class="hosts-stat-item">
+              <span class="hosts-stat-label">总行数</span>
+              <span class="hosts-stat-value">{{ hosts.lines }}</span>
+            </div>
+            <div class="hosts-stat-item">
+              <span class="hosts-stat-label">有效条目</span>
+              <span class="hosts-stat-value">{{ hosts.entries }}</span>
+            </div>
+            <div class="hosts-stat-item">
+              <span class="hosts-stat-label">备份</span>
+              <span class="hosts-stat-value" :class="hosts.hasBackup ? 'hosts-ok' : 'hosts-warn'">
+                {{ hosts.hasBackup ? `${hosts.backupSize} B` : '无' }}
+              </span>
+            </div>
+            <div class="hosts-stat-item">
+              <span class="hosts-stat-label">dnsmasq</span>
+              <span class="hosts-stat-value" :class="hosts.dnsmasq ? 'hosts-ok' : 'hosts-warn'">
+                {{ hosts.dnsmasq ? '可用' : '不存在' }}
+              </span>
+            </div>
+          </div>
+
+          <el-input
+            v-model="hosts.content"
+            type="textarea"
+            :rows="16"
+            placeholder="127.0.0.1 localhost"
+            spellcheck="false"
+            class="hosts-editor" />
+
+          <div class="system-tool-actions" style="margin-top:12px">
+            <el-button type="primary" :loading="hosts.saving" @click="saveHosts">保存</el-button>
+            <el-button type="success" :loading="hosts.saving" :disabled="!hosts.dnsmasq" @click="saveAndReloadDns">保存 + 刷新 DNS</el-button>
+            <el-button :loading="hosts.saving" :disabled="!hosts.hasBackup" @click="restoreHosts">恢复备份</el-button>
+            <el-button @click="appendZteBlock">追加 ZTE 屏蔽</el-button>
+            <el-button @click="resetHostsSkeleton">重置骨架</el-button>
+          </div>
+
+          <div v-if="!hosts.writable" class="hosts-readonly-warn">
+            ⚠️ /etc/hosts 可能不可写（rootfs 只读），如保存失败请先执行 mount -o remount,rw /
+          </div>
+
+          <div v-if="hosts.status" class="local-speedtest-message">{{ hosts.status }}</div>
+        </div>
+      </el-tab-pane>
     </el-tabs>
     <template #footer>
       <el-button @click="systemToolsDialogVisible = false" :disabled="localSpeedTest.running">关闭</el-button>
@@ -2026,6 +2083,7 @@
         <el-button v-else type="primary" @click="startLocalSpeedTest">开始测速</el-button>
       </template>
       <el-button v-else-if="systemToolsActiveTab === 'rcLocal'" type="primary" :loading="rcLocal.saving" @click="saveRcLocal">保存</el-button>
+      <el-button v-else-if="systemToolsActiveTab === 'hosts'" type="primary" :loading="hosts.saving" @click="saveHosts">保存</el-button>
     </template>
   </el-dialog>
 
@@ -2600,7 +2658,7 @@ const wifiSettingsSummary = computed(() => {
   return wifiSettingsSaving.value ? '应用中...' : `${wifiInfo.value.wifiStatus24 ? '2.4G开' : '2.4G关'} / ${wifiInfo.value.wifiStatus5 ? '5G开' : '5G关'}`;
 });
 
-type SystemToolsTab = 'speedtest' | 'sms' | 'rcLocal' | 'frpc' | 'tailscale' | 'simswitch';
+type SystemToolsTab = 'speedtest' | 'sms' | 'rcLocal' | 'frpc' | 'tailscale' | 'simswitch' | 'hosts';
 
 interface SmsMessage {
   id: number;
@@ -2679,6 +2737,42 @@ const rcLocal = reactive({
   saving: false,
   loaded: false,
   content: '',
+  status: '',
+});
+
+// ── Hosts 管理 ──
+const PRESET_ZTE_BLOCK = `# --- ZTE 系统更新 / 遥测 屏蔽 (按需删改) ---
+127.0.0.1  ctm.zte.com.cn
+127.0.0.1  report.server.nubia.cn
+127.0.0.1  www.myzte.cn
+127.0.0.1  myzte.cn
+127.0.0.1  ztedevice.com
+127.0.0.1  rot-dispatch-asia.ztesmarthome.com
+127.0.0.1  ztesmarthome.com
+127.0.0.1  zx.zte.com.cn
+127.0.0.1  ztems.com
+127.0.0.1  seecom.com.cn
+127.0.0.1  ufi.seecom.com.cn
+127.0.0.1  dmcn.ztems.com
+# --- end ZTE block ---
+`;
+const PRESET_HOSTS_SKELETON = `127.0.0.1 localhost OpenWrt
+
+::1     localhost ip6-localhost ip6-loopback
+ff02::1 ip6-allnodes
+ff02::2 ip6-allrouters
+`;
+const hosts = reactive({
+  loading: false,
+  saving: false,
+  loaded: false,
+  content: '',
+  lines: 0,
+  entries: 0,
+  hasBackup: false,
+  backupSize: 0,
+  dnsmasq: false,
+  writable: true,
   status: '',
 });
 
@@ -3093,6 +3187,104 @@ async function saveRcLocal() {
   } finally {
     rcLocal.saving = false;
   }
+}
+
+// ── Hosts 管理 ──
+async function loadHosts() {
+  hosts.loading = true;
+  hosts.status = '';
+  try {
+    const res = await axios.get('/api/system/hosts');
+    if (res.data.code !== 0) throw new Error(res.data.msg);
+    const d = res.data.data;
+    hosts.content = d.content || '';
+    hosts.lines = d.lines || 0;
+    hosts.entries = d.entries || 0;
+    hosts.hasBackup = !!d.has_backup;
+    hosts.backupSize = d.backup_size || 0;
+    hosts.dnsmasq = !!d.dnsmasq;
+    hosts.writable = d.writable !== false;
+    hosts.loaded = true;
+  } catch (e: any) {
+    hosts.status = '读取 hosts 失败: ' + (e?.message ?? e);
+    ElMessage.error(hosts.status);
+  } finally {
+    hosts.loading = false;
+  }
+}
+
+async function saveHosts() {
+  hosts.saving = true;
+  hosts.status = '正在保存...';
+  try {
+    const res = await axios.put('/api/system/hosts', { content: hosts.content });
+    if (res.data.code !== 0) throw new Error(res.data.msg);
+    hosts.status = '保存成功（已自动备份）';
+    ElMessage.success('Hosts 已保存');
+    await loadHosts();
+  } catch (e: any) {
+    hosts.status = '保存失败: ' + (e?.message ?? e);
+    ElMessage.error(hosts.status);
+  } finally {
+    hosts.saving = false;
+  }
+}
+
+async function saveAndReloadDns() {
+  hosts.saving = true;
+  hosts.status = '正在保存并刷新 DNS...';
+  try {
+    const saveRes = await axios.put('/api/system/hosts', { content: hosts.content });
+    if (saveRes.data.code !== 0) throw new Error(saveRes.data.msg);
+    const reloadRes = await axios.post('/api/system/hosts/reload-dns');
+    if (reloadRes.data.code !== 0) throw new Error(reloadRes.data.msg);
+    hosts.status = '保存成功，DNS 已刷新: ' + (reloadRes.data.msg || '');
+    ElMessage.success('Hosts 已保存，DNS 已刷新');
+    await loadHosts();
+  } catch (e: any) {
+    hosts.status = '操作失败: ' + (e?.message ?? e);
+    ElMessage.error(hosts.status);
+  } finally {
+    hosts.saving = false;
+  }
+}
+
+async function restoreHosts() {
+  try {
+    await ElMessageBox.confirm('从备份恢复 /etc/hosts？当前内容将被覆盖。', '确认', { type: 'warning' });
+  } catch {
+    return;
+  }
+  hosts.saving = true;
+  hosts.status = '正在恢复...';
+  try {
+    const res = await axios.post('/api/system/hosts/restore');
+    if (res.data.code !== 0) throw new Error(res.data.msg);
+    hosts.status = '已从备份恢复';
+    ElMessage.success('Hosts 已从备份恢复');
+    await loadHosts();
+  } catch (e: any) {
+    hosts.status = '恢复失败: ' + (e?.message ?? e);
+    ElMessage.error(hosts.status);
+  } finally {
+    hosts.saving = false;
+  }
+}
+
+function appendZteBlock() {
+  const cur = hosts.content || '';
+  const suffix = cur.endsWith('\n') ? '' : '\n';
+  hosts.content = cur + suffix + PRESET_ZTE_BLOCK;
+  ElMessage.info('已追加 ZTE 屏蔽规则，需点保存生效');
+}
+
+function resetHostsSkeleton() {
+  ElMessageBox.confirm('重置为骨架（仅保留 localhost）？文本框将被替换。', '确认', { type: 'warning' })
+    .then(() => {
+      hosts.content = PRESET_HOSTS_SKELETON;
+      ElMessage.info('已重置，需点保存生效');
+    })
+    .catch(() => {});
 }
 
 function normalizeSpeedTestThreads(value: unknown) {
@@ -6633,6 +6825,7 @@ watch(systemToolsActiveTab, (tab) => {
     if (smsMessages.value.length === 0) loadSmsMessages();
   }
   if (tab === 'rcLocal' && !rcLocal.loaded) loadRcLocal();
+  if (tab === 'hosts' && !hosts.loaded) loadHosts();
 });
 
 onMounted(() => {
@@ -8820,6 +9013,63 @@ onUnmounted(() => {
 .rc-local-editor :deep(.el-textarea__inner) {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   line-height: 1.5;
+}
+
+.hosts-editor :deep(.el-textarea__inner) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  line-height: 1.55;
+}
+
+.hosts-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+
+.hosts-stat-item {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  text-align: center;
+}
+
+.hosts-stat-label {
+  display: block;
+  font-size: 0.7rem;
+  opacity: 0.66;
+  margin-bottom: 4px;
+}
+
+.hosts-stat-value {
+  display: block;
+  font-size: 0.9rem;
+  font-weight: 700;
+  word-break: break-word;
+}
+
+.hosts-stat-value.hosts-ok {
+  color: #95ffb2;
+}
+
+.hosts-stat-value.hosts-warn {
+  color: #ffc299;
+}
+
+.hosts-readonly-warn {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(255, 144, 84, 0.12);
+  color: #ffc299;
+  font-size: 0.75rem;
+}
+
+@media (max-width: 760px) {
+  .hosts-stat-grid {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 @media (max-width: 560px) {

@@ -6,7 +6,6 @@ import (
 	"gossh/gin"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -153,14 +152,4 @@ func testWritePermission(path string) error {
 	}
 	f.Close()
 	return nil
-}
-
-func copyFile(src, dst string) error {
-	data, err := os.ReadFile(src)
-	if err != nil {
-		return err
-	}
-	dir := filepath.Dir(dst)
-	_ = os.MkdirAll(dir, 0755)
-	return os.WriteFile(dst, data, 0644)
 }

@@ -2060,7 +2060,7 @@
             spellcheck="false"
             class="hosts-editor" />
 
-          <div class="system-tool-actions" style="margin-top:12px">
+          <div class="system-tool-actions hosts-actions" style="margin-top:12px">
             <el-button type="primary" :loading="hosts.saving" @click="saveHosts">保存</el-button>
             <el-button type="success" :loading="hosts.saving" :disabled="!hosts.dnsmasq" @click="saveAndReloadDns">保存 + 刷新 DNS</el-button>
             <el-button :loading="hosts.saving" :disabled="!hosts.hasBackup" @click="restoreHosts">恢复备份</el-button>
@@ -9066,9 +9066,30 @@ onUnmounted(() => {
   font-size: 0.75rem;
 }
 
+/* Hosts 操作按钮：按钮多时自适应换行，保持内容宽度不挤压 */
+.hosts-actions .el-button {
+  flex: 0 0 auto;
+  min-width: auto;
+}
+
 @media (max-width: 760px) {
   .hosts-stat-grid {
     grid-template-columns: 1fr 1fr;
+  }
+  .hosts-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .hosts-actions .el-button {
+    flex: 1 1 calc(50% - 4px);
+    min-width: 0;
+  }
+}
+
+@media (max-width: 420px) {
+  .hosts-actions .el-button {
+    flex: 1 1 100%;
   }
 }
 

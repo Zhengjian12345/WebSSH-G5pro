@@ -45,13 +45,14 @@ func CellLookupGetStatusHandler(c *gin.Context) {
 
 // CellLookupGetDataHandler GET /api/system/cell-lookup/data
 // 直接返回 .gz 文件，前端用 DecompressionStream 解压
+// 注意：不能设置 Content-Encoding: gzip，否则浏览器会透明解压，
+// 导致前端 DecompressionStream 二次解压失败
 func CellLookupGetDataHandler(c *gin.Context) {
 	if _, err := os.Stat(cellLookupDataFile); err != nil {
 		c.JSON(404, gin.H{"code": 1, "msg": "数据文件不存在"})
 		return
 	}
-	c.Header("Content-Type", "application/gzip")
-	c.Header("Content-Encoding", "gzip")
+	c.Header("Content-Type", "application/octet-stream")
 	c.File(cellLookupDataFile)
 }
 

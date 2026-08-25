@@ -50,6 +50,7 @@ declare module 'vue' {
     ElTabs: typeof import('element-plus/es')['ElTabs']
     ElTag: typeof import('element-plus/es')['ElTag']
     ElTooltip: typeof import('element-plus/es')['ElTooltip']
+    ElUpload: typeof import('element-plus/es')['ElUpload']
     LoginAudit: typeof import('./src/components/LoginAudit.vue')['default']
     Mihomo: typeof import('./src/components/Mihomo.vue')['default']
     NetFilter: typeof import('./src/components/NetFilter.vue')['default']

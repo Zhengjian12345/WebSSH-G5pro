@@ -2075,6 +2075,145 @@
           <div v-if="hosts.status" class="local-speedtest-message">{{ hosts.status }}</div>
         </div>
       </el-tab-pane>
+
+      <!-- ── 小区基站查询（隐藏，输入 uu60 解锁） ── -->
+      <el-tab-pane v-if="cellLookupUnlocked" label="小区查询" name="cell">
+        <div class="system-tool-panel">
+          <div class="system-tool-header">
+            <div>
+              <div class="settings-section-title">小区基站查询</div>
+              <div class="system-tool-hint">查询基站/小区参数，支持 CGI、PCI+频点、站号、站名、自动获取</div>
+            </div>
+            <div style="display:flex;gap:8px">
+              <el-button size="small" :loading="cellLookup.loading" @click="loadCellLookupData">刷新数据</el-button>
+              <el-button size="small" type="danger" plain @click="uninstallCellLookupData">卸载</el-button>
+            </div>
+          </div>
+
+          <!-- 数据状态 -->
+          <div class="cell-status" v-if="cellLookup.status">
+            <span v-html="cellLookup.status"></span>
+          </div>
+
+          <!-- 上传区域 -->
+          <div v-if="!cellLookup.dataLoaded" class="cell-upload-area">
+            <div class="cell-upload-hint">数据未加载，请上传 cell_data.json.gz 文件：</div>
+            <el-upload
+              action="/api/system/cell-lookup/upload"
+              :show-file-list="false"
+              :before-upload="beforeCellDataUpload"
+              :http-request="uploadCellDataFile"
+              accept=".gz,.json">
+              <el-button type="primary" :loading="cellLookup.saving">
+                {{ cellLookup.saving ? cellLookup.uploadText : '选择 cell_data.json.gz 上传' }}
+              </el-button>
+            </el-upload>
+            <el-progress
+              v-if="cellLookup.saving && cellLookup.uploadProgress > 0"
+              :percentage="cellLookup.uploadProgress"
+              :stroke-width="20"
+              :text-inside="true"
+              style="margin-top:10px" />
+          </div>
+
+          <!-- 查询区 -->
+          <div v-if="cellLookup.dataLoaded">
+            <!-- 查询模式切换 -->
+            <div class="cell-query-tabs">
+              <el-button-group>
+                <el-button size="small" :type="cellLookup.activeQueryTab === 'cgi' ? 'primary' : ''" @click="cellLookup.activeQueryTab = 'cgi'">CGI</el-button>
+                <el-button size="small" :type="cellLookup.activeQueryTab === 'pci' ? 'primary' : ''" @click="cellLookup.activeQueryTab = 'pci'">PCI+频点</el-button>
+                <el-button size="small" :type="cellLookup.activeQueryTab === 'sn' ? 'primary' : ''" @click="cellLookup.activeQueryTab = 'sn'">站号</el-button>
+                <el-button size="small" :type="cellLookup.activeQueryTab === 'name' ? 'primary' : ''" @click="cellLookup.activeQueryTab = 'name'">站名</el-button>
+                <el-button size="small" :type="cellLookup.activeQueryTab === 'auto' ? 'primary' : ''" @click="cellLookup.activeQueryTab = 'auto'">自动获取</el-button>
+              </el-button-group>
+            </div>
+
+            <!-- CGI 查询 -->
+            <div v-if="cellLookup.activeQueryTab === 'cgi'" class="cell-query-input">
+              <el-input v-model="cellLookup.cgiInput" placeholder="CGI 如 460-15-3223744-22" @keyup.enter="doCellLookup('cgi')" />
+              <el-button type="primary" :loading="cellLookup.querying" @click="doCellLookup('cgi')">查询</el-button>
+            </div>
+
+            <!-- PCI + 频点查询 -->
+            <div v-if="cellLookup.activeQueryTab === 'pci'" class="cell-query-input">
+              <el-input v-model="cellLookup.pciInput" placeholder="PCI" style="width:120px" @keyup.enter="doCellLookup('pci')" />
+              <el-input v-model="cellLookup.earfcnInput" placeholder="EARFCN" style="width:160px" @keyup.enter="doCellLookup('pci')" />
+              <el-button type="primary" :loading="cellLookup.querying" @click="doCellLookup('pci')">查询</el-button>
+            </div>
+
+            <!-- 站号查询 -->
+            <div v-if="cellLookup.activeQueryTab === 'sn'" class="cell-query-input">
+              <el-input v-model="cellLookup.snInput" placeholder="站号 eNBID 如 3223744" @keyup.enter="doCellLookup('sn')" />
+              <el-button type="primary" :loading="cellLookup.querying" @click="doCellLookup('sn')">查询</el-button>
+            </div>
+
+            <!-- 站名查询 -->
+            <div v-if="cellLookup.activeQueryTab === 'name'" class="cell-query-input">
+              <el-input v-model="cellLookup.nameInput" placeholder="站名关键词 如 天和" @keyup.enter="doCellLookup('name')" />
+              <el-button type="primary" :loading="cellLookup.querying" @click="doCellLookup('name')">查询</el-button>
+            </div>
+
+            <!-- 自动获取 -->
+            <div v-if="cellLookup.activeQueryTab === 'auto'" class="cell-auto-panel">
+              <el-button type="primary" :loading="cellLookup.querying" @click="doCellAutoLookup">从设备获取当前小区参数</el-button>
+            </div>
+
+            <!-- 查询结果 -->
+            <div class="cell-results" v-if="cellLookup.results.length > 0 || cellLookup.deviceInfo">
+              <!-- 设备小区参数 -->
+              <div v-if="cellLookup.deviceInfo" class="cell-device-info">
+                <div class="cell-device-title">当前设备小区参数</div>
+                <div class="cell-device-grid">
+                  <span>网络: {{ cellLookup.deviceInfo.net_type || '—' }}</span>
+                  <span>PCI: {{ cellLookup.deviceInfo.pci || '—' }}</span>
+                  <span>频点: {{ cellLookup.deviceInfo.earfcn || '—' }}</span>
+                  <span>CellID: {{ cellLookup.deviceInfo.cell_id || '—' }}</span>
+                  <span>RSRP: {{ cellLookup.deviceInfo.rsrp || '—' }}</span>
+                  <span>运营商: {{ cellLookup.deviceInfo.operator || '—' }}</span>
+                </div>
+              </div>
+
+              <!-- 查询结果列表 -->
+              <div v-for="(r, i) in cellLookup.results.slice(0, 20)" :key="i" class="cell-result-item">
+                <div class="cell-result-header">
+                  <span class="cell-result-name">{{ r.name }} <span class="cell-result-sn">({{ r.sn }})</span></span>
+                  <span class="cell-result-mfr">{{ r.mfr }}</span>
+                </div>
+                <div class="cell-result-grid">
+                  <div class="cell-result-field"><span class="cell-field-label">站号</span><span class="cell-field-value">{{ r.sn || '—' }}</span></div>
+                  <div class="cell-result-field"><span class="cell-field-label">厂商</span><span class="cell-field-value">{{ r.mfr || '—' }}</span></div>
+                  <div class="cell-result-field"><span class="cell-field-label">经度</span><span class="cell-field-value">{{ r.lon || '—' }}</span></div>
+                  <div class="cell-result-field"><span class="cell-field-label">纬度</span><span class="cell-field-value">{{ r.lat || '—' }}</span></div>
+                  <div class="cell-result-field cell-field-wide"><span class="cell-field-label">地址</span><span class="cell-field-value">{{ r.addr || '—' }}</span></div>
+                </div>
+                <div v-if="r.cgi" class="cell-result-cell">
+                  <div class="cell-cell-title">小区级参数</div>
+                  <div class="cell-result-grid">
+                    <div class="cell-result-field"><span class="cell-field-label">CGI</span><span class="cell-field-value">{{ r.cgi }}</span></div>
+                    <div class="cell-result-field"><span class="cell-field-label">小区名</span><span class="cell-field-value">{{ r.cellName }}</span></div>
+                    <div class="cell-result-field"><span class="cell-field-label">网络制式</span><span class="cell-field-value">{{ r.netType }}</span></div>
+                    <div class="cell-result-field"><span class="cell-field-label">PCI</span><span class="cell-field-value">{{ r.pci }}</span></div>
+                    <div class="cell-result-field"><span class="cell-field-label">频点</span><span class="cell-field-value">{{ r.earfcn }}</span></div>
+                    <div class="cell-result-field"><span class="cell-field-label">带宽</span><span class="cell-field-value">{{ r.bw ? r.bw + 'MHz' : '—' }}</span></div>
+                    <div class="cell-result-field"><span class="cell-field-label">TAC</span><span class="cell-field-value">{{ r.tac || '—' }}</span></div>
+                    <div class="cell-result-field"><span class="cell-field-label">LCID</span><span class="cell-field-value">{{ r.lcid || '—' }}</span></div>
+                  </div>
+                </div>
+                <div v-if="r.lat && r.lon" class="cell-result-map">
+                  <a :href="`https://uri.amap.com/marker?position=${r.lon},${r.lat}`" target="_blank" class="cell-map-link">地图定位</a>
+                </div>
+              </div>
+              <div v-if="cellLookup.results.length > 20" class="cell-more-hint">显示前20条，共{{ cellLookup.results.length }}条</div>
+            </div>
+
+            <!-- 无结果 -->
+            <div v-if="cellLookup.results.length === 0 && !cellLookup.querying && cellLookup._statCount" class="cell-empty">
+              未找到匹配的基站信息
+            </div>
+          </div>
+        </div>
+      </el-tab-pane>
     </el-tabs>
     <template #footer>
       <el-button @click="systemToolsDialogVisible = false" :disabled="localSpeedTest.running">关闭</el-button>
@@ -2658,7 +2797,7 @@ const wifiSettingsSummary = computed(() => {
   return wifiSettingsSaving.value ? '应用中...' : `${wifiInfo.value.wifiStatus24 ? '2.4G开' : '2.4G关'} / ${wifiInfo.value.wifiStatus5 ? '5G开' : '5G关'}`;
 });
 
-type SystemToolsTab = 'speedtest' | 'sms' | 'rcLocal' | 'frpc' | 'tailscale' | 'simswitch' | 'hosts';
+type SystemToolsTab = 'speedtest' | 'sms' | 'rcLocal' | 'frpc' | 'tailscale' | 'simswitch' | 'hosts' | 'cell';
 
 interface SmsMessage {
   id: number;
@@ -2774,6 +2913,35 @@ const hosts = reactive({
   dnsmasq: false,
   writable: true,
   status: '',
+});
+
+// ── 小区基站查询（隐藏功能，输入 uu60 解锁）──
+const cellLookupUnlocked = ref(false);
+const cellLookup = reactive({
+  loading: false,
+  saving: false,
+  dataLoaded: false,
+  status: '',
+  uploadProgress: 0,
+  uploadText: '',
+  activeQueryTab: 'cgi' as 'cgi' | 'pci' | 'sn' | 'name' | 'auto',
+  // 查询输入
+  cgiInput: '',
+  pciInput: '',
+  earfcnInput: '',
+  snInput: '',
+  nameInput: '',
+  // 查询结果
+  results: [] as any[],
+  deviceInfo: null as any,
+  querying: false,
+  // 内部数据
+  _S: null as any[] | null,
+  _C: null as any[] | null,
+  _P: null as Record<string, number[]> | null,
+  _Sm: null as Record<string, any> | null,
+  _E: null as Record<string, number> | null,
+  _statCount: '',
 });
 
 // ── frpc 内网穿透 ──
@@ -3285,6 +3453,310 @@ function resetHostsSkeleton() {
       ElMessage.info('已重置，需点保存生效');
     })
     .catch(() => {});
+}
+
+// ══════════════════════════════════════════
+// 小区基站查询（uu60 隐藏功能）
+// ══════════════════════════════════════════
+const MFR_LIST = ['华为', '诺基亚', '未知', '中兴'];
+const NET_TYPE_LIST = ['SA', 'NSA', 'LTE', 'TDD', 'FDD'];
+
+// ── uu60 按键序列检测 ──
+let _uu60Buffer = '';
+function handleUu60Keydown(e: KeyboardEvent) {
+  if (!systemToolsDialogVisible.value) return;
+  // 只处理可见字符
+  if (e.key.length !== 1) return;
+  _uu60Buffer += e.key.toLowerCase();
+  if (_uu60Buffer.length > 4) _uu60Buffer = _uu60Buffer.slice(-4);
+  if (_uu60Buffer === 'uu60') {
+    cellLookupUnlocked.value = true;
+    ElMessage.success('小区查询功能已解锁');
+    // 自动切换到该标签
+    nextTick(() => {
+      systemToolsActiveTab.value = 'cell';
+      loadCellLookupData();
+    });
+    _uu60Buffer = '';
+  }
+}
+
+// ── 解析数据 ──
+function parseCellData(text: string) {
+  const data = JSON.parse(text);
+  const S = data.S as any[];
+  const C = data.C as any[];
+  const P = data.P as Record<string, number[]>;
+  const Sm: Record<string, any> = {};
+  for (const s of S) Sm[s[0]] = s;
+  // 从 C 构建 CGI 索引
+  const E: Record<string, number> = {};
+  for (let i = 0; i < C.length; i++) {
+    const c = C[i];
+    E[c[0] + '-' + c[2] + '-' + c[1]] = i;
+  }
+  cellLookup._S = S;
+  cellLookup._C = C;
+  cellLookup._P = P;
+  cellLookup._Sm = Sm;
+  cellLookup._E = E;
+  cellLookup._statCount = `${S.length} 个基站, ${C.length} 个小区`;
+}
+
+// ── 加载数据 ──
+async function loadCellLookupData() {
+  cellLookup.loading = true;
+  cellLookup.status = '正在检查数据...';
+  try {
+    const res = await axios.get('/api/system/cell-lookup/status');
+    if (res.data.code !== 0) throw new Error(res.data.msg);
+    const d = res.data.data;
+    if (!d.exists) {
+      cellLookup.dataLoaded = false;
+      cellLookup.status = '<span style="color:#ffb74d">数据未加载，请先上传数据文件</span>';
+      return;
+    }
+    cellLookup.status = `数据文件: ${d.size_text}，正在加载...`;
+    // 获取 gz 文件
+    const resp = await fetch('/api/system/cell-lookup/data');
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const buf = await resp.arrayBuffer();
+    // DecompressionStream 解压
+    if (typeof DecompressionStream !== 'undefined') {
+      const blob = new Blob([buf]);
+      const ds = new DecompressionStream('gzip');
+      const stream = blob.stream().pipeThrough(ds);
+      const text = await new Response(stream).text();
+      if (text && text.length > 100) {
+        parseCellData(text);
+        cellLookup.dataLoaded = true;
+        cellLookup.status = `<span style="color:#81c784">已加载 ${cellLookup._statCount}，可查询</span>`;
+      } else {
+        throw new Error('解压后内容为空');
+      }
+    } else {
+      throw new Error('浏览器不支持 DecompressionStream');
+    }
+  } catch (e: any) {
+    cellLookup.dataLoaded = false;
+    cellLookup.status = `<span style="color:#f44336">加载失败: ${e?.message ?? e}</span>`;
+  } finally {
+    cellLookup.loading = false;
+  }
+}
+
+// ── 构建小区结果 ──
+function buildCellResult(cellIdx: number): any {
+  if (!cellLookup._C || !cellLookup._Sm) return null;
+  const c = cellLookup._C[cellIdx];
+  if (!c) return null;
+  const enbid = c[2];
+  const sta = cellLookup._Sm[enbid];
+  if (!sta) return null;
+  const cgi = '460-' + c[0] + '-' + c[2] + '-' + c[1];
+  let addr = sta[5] || '';
+  if (addr) addr = '上海市' + addr;
+  return {
+    sn: String(enbid), name: sta[1] || '未知', mfr: MFR_LIST[sta[2]] || '未知',
+    lon: sta[3] ? String(sta[3]) : '', lat: sta[4] ? String(sta[4]) : '',
+    addr, cgi, cellName: (sta[1] || '') + '_' + c[1],
+    pci: c[3], earfcn: c[4], tac: c[5], bw: c[6], lcid: c[7],
+    netType: NET_TYPE_LIST[c[8]] || '',
+  };
+}
+
+// ── 查询函数 ──
+function lookupCGI(cgi: string): any[] {
+  if (!cellLookup._E) return [];
+  const parts = cgi.trim().split(/[-,]/);
+  if (parts.length >= 4) {
+    const key = parts[1].trim() + '-' + parts[2].trim() + '-' + parts[3].trim();
+    const idx = cellLookup._E[key];
+    if (idx !== undefined) {
+      const r = buildCellResult(idx);
+      return r ? [r] : [];
+    }
+  }
+  return [];
+}
+
+function lookupPCI(pci: string, earfcn: string): any[] {
+  if (!cellLookup._P) return [];
+  const key = String(pci).trim() + '_' + String(earfcn).trim();
+  const indices = cellLookup._P[key];
+  if (!indices) return [];
+  const results: any[] = [];
+  for (const i of indices) {
+    const r = buildCellResult(i);
+    if (r) results.push(r);
+  }
+  return results;
+}
+
+function lookupSN(sn: string): any[] {
+  if (!cellLookup._Sm) return [];
+  const sta = cellLookup._Sm[String(sn).trim()];
+  if (!sta) return [];
+  let addr = sta[5] || '';
+  if (addr) addr = '上海市' + addr;
+  return [{
+    sn: String(sn), name: sta[1] || '未知', mfr: MFR_LIST[sta[2]] || '未知',
+    lon: sta[3] ? String(sta[3]) : '', lat: sta[4] ? String(sta[4]) : '',
+    addr, cgi: '', cellName: '', pci: '', earfcn: '', tac: '', bw: '', lcid: '', netType: '',
+  }];
+}
+
+function lookupName(name: string): any[] {
+  if (!cellLookup._Sm) return [];
+  const q = name.trim().toLowerCase();
+  const results: any[] = [];
+  for (const sn in cellLookup._Sm) {
+    if ((cellLookup._Sm[sn][1] || '').toLowerCase().indexOf(q) >= 0) {
+      const sta = cellLookup._Sm[sn];
+      let addr = sta[5] || '';
+      if (addr) addr = '上海市' + addr;
+      results.push({
+        sn, name: sta[1] || '未知', mfr: MFR_LIST[sta[2]] || '未知',
+        lon: sta[3] ? String(sta[3]) : '', lat: sta[4] ? String(sta[4]) : '',
+        addr, cgi: '', cellName: '', pci: '', earfcn: '', tac: '', bw: '', lcid: '', netType: '',
+      });
+      if (results.length >= 30) break;
+    }
+  }
+  return results;
+}
+
+function lookupCellID(cid: string): any[] {
+  const cidNum = parseInt(cid);
+  if (isNaN(cidNum) || !cellLookup._E) return [];
+  const bitsList = [8, 10, 6, 12, 14];
+  for (const bits of bitsList) {
+    const enbid = Math.floor(cidNum / Math.pow(2, bits));
+    const cellId = cidNum % Math.pow(2, bits);
+    for (let mnc = 0; mnc <= 15; mnc++) {
+      const key = mnc + '-' + enbid + '-' + cellId;
+      const idx = cellLookup._E[key];
+      if (idx !== undefined) {
+        const r = buildCellResult(idx);
+        if (r) return [r];
+      }
+    }
+    if (cellLookup._Sm[String(enbid)]) return lookupSN(String(enbid));
+  }
+  return [];
+}
+
+// ── 执行查询 ──
+async function doCellLookup(type: 'cgi' | 'pci' | 'sn' | 'name') {
+  if (!cellLookup.dataLoaded) {
+    ElMessage.warning('请先加载数据');
+    return;
+  }
+  cellLookup.querying = true;
+  cellLookup.results = [];
+  cellLookup.deviceInfo = null;
+  cellLookup._statCount = '查询中...';
+  // 延迟以让 UI 更新
+  await new Promise(r => setTimeout(r, 30));
+  try {
+    let res: any[] = [];
+    if (type === 'cgi') res = lookupCGI(cellLookup.cgiInput);
+    else if (type === 'pci') res = lookupPCI(cellLookup.pciInput, cellLookup.earfcnInput);
+    else if (type === 'sn') res = lookupSN(cellLookup.snInput);
+    else if (type === 'name') res = lookupName(cellLookup.nameInput);
+    cellLookup.results = res;
+    cellLookup._statCount = res.length > 0 ? `找到 ${res.length} 条结果` : '未找到';
+  } finally {
+    cellLookup.querying = false;
+  }
+}
+
+// ── 自动从设备获取 ──
+async function doCellAutoLookup() {
+  if (!cellLookup.dataLoaded) {
+    ElMessage.warning('请先加载数据');
+    return;
+  }
+  cellLookup.querying = true;
+  cellLookup.results = [];
+  cellLookup.deviceInfo = null;
+  cellLookup._statCount = '获取设备参数中...';
+  try {
+    const res = await axios.get('/api/system/cell-lookup/device-info');
+    if (res.data.code !== 0) throw new Error(res.data.msg || '获取失败');
+    const info = res.data.data;
+    cellLookup.deviceInfo = info;
+    let res2: any[] = [];
+    if (info.cell_id) res2 = lookupCellID(info.cell_id);
+    if (res2.length === 0 && info.pci && info.earfcn) res2 = lookupPCI(info.pci, info.earfcn);
+    cellLookup.results = res2;
+    cellLookup._statCount = res2.length > 0 ? `找到 ${res2.length} 条结果` : '未找到';
+  } catch (e: any) {
+    cellLookup._statCount = '获取失败: ' + (e?.message ?? e);
+  } finally {
+    cellLookup.querying = false;
+  }
+}
+
+// ── 上传 ──
+function beforeCellDataUpload(file: File) {
+  const isGz = file.name.endsWith('.gz') || file.name.endsWith('.json');
+  if (!isGz) {
+    ElMessage.error('请上传 .gz 或 .json 文件');
+    return false;
+  }
+  return true;
+}
+
+async function uploadCellDataFile(options: any) {
+  const file = options.file as File;
+  cellLookup.saving = true;
+  cellLookup.uploadProgress = 0;
+  cellLookup.uploadText = '准备上传...';
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await axios.post('/api/system/cell-lookup/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      onUploadProgress: (e: any) => {
+        if (e.total) {
+          cellLookup.uploadProgress = Math.round((e.loaded / e.total) * 100);
+          cellLookup.uploadText = `上传中 ${cellLookup.uploadProgress}%`;
+        }
+      },
+    });
+    if (res.data.code !== 0) throw new Error(res.data.msg);
+    ElMessage.success('上传成功');
+    await loadCellLookupData();
+  } catch (e: any) {
+    ElMessage.error('上传失败: ' + (e?.message ?? e));
+  } finally {
+    cellLookup.saving = false;
+    cellLookup.uploadProgress = 0;
+  }
+}
+
+// ── 卸载数据 ──
+async function uninstallCellLookupData() {
+  try {
+    await ElMessageBox.confirm('确定要卸载小区数据吗？将删除数据文件。', '确认', { type: 'warning' });
+  } catch { return; }
+  try {
+    const res = await axios.post('/api/system/cell-lookup/uninstall');
+    if (res.data.code !== 0) throw new Error(res.data.msg);
+    cellLookup.dataLoaded = false;
+    cellLookup._S = null;
+    cellLookup._C = null;
+    cellLookup._P = null;
+    cellLookup._Sm = null;
+    cellLookup._E = null;
+    cellLookup.results = [];
+    cellLookup.deviceInfo = null;
+    cellLookup.status = '<span style="color:#ffb74d">数据已卸载</span>';
+    ElMessage.success('数据已卸载');
+  } catch (e: any) {
+    ElMessage.error('卸载失败: ' + (e?.message ?? e));
+  }
 }
 
 function normalizeSpeedTestThreads(value: unknown) {
@@ -6826,6 +7298,7 @@ watch(systemToolsActiveTab, (tab) => {
   }
   if (tab === 'rcLocal' && !rcLocal.loaded) loadRcLocal();
   if (tab === 'hosts' && !hosts.loaded) loadHosts();
+  if (tab === 'cell' && !cellLookup.dataLoaded && !cellLookup.loading) loadCellLookupData();
 });
 
 onMounted(() => {
@@ -6842,6 +7315,8 @@ onMounted(() => {
   netAmbrGetHandler();
   // G5Pro: 直接加载 Mihomo 状态（彩蛋已解锁）
   loadMmStatus();
+  // 小区查询: uu60 按键序列监听
+  window.addEventListener('keydown', handleUu60Keydown);
 });
 
 onUnmounted(() => {
@@ -6854,6 +7329,8 @@ onUnmounted(() => {
     clearTimeout(mmGateClickTimer);
     mmGateClickTimer = null;
   }
+  // 小区查询: 移除按键监听
+  window.removeEventListener('keydown', handleUu60Keydown);
   // 兜底还原（防止组件卸载时仍残留锁定样式）
   const body = document.body;
   body.style.position = '';
@@ -9090,6 +9567,175 @@ onUnmounted(() => {
 @media (max-width: 420px) {
   .hosts-actions .el-button {
     flex: 1 1 100%;
+  }
+}
+
+/* ── 小区基站查询 ── */
+.cell-status {
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+}
+.cell-upload-area {
+  padding: 16px;
+  border: 1px dashed rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  text-align: center;
+}
+.cell-upload-hint {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+  margin-bottom: 10px;
+}
+.cell-query-tabs {
+  margin-bottom: 10px;
+  overflow-x: auto;
+}
+.cell-query-tabs .el-button-group {
+  flex-wrap: wrap;
+}
+.cell-query-input {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.cell-query-input .el-input {
+  flex: 1;
+}
+.cell-auto-panel {
+  text-align: center;
+  padding: 10px;
+}
+.cell-results {
+  margin-top: 12px;
+}
+.cell-device-info {
+  background: rgba(79, 195, 247, 0.1);
+  border: 1px solid rgba(79, 195, 247, 0.2);
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 10px;
+}
+.cell-device-title {
+  font-size: 11px;
+  color: rgba(79, 195, 247, 0.8);
+  margin-bottom: 6px;
+}
+.cell-device-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  font-size: 12px;
+  color: #fff;
+}
+.cell-result-item {
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 8px;
+}
+.cell-result-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.cell-result-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+}
+.cell-result-sn {
+  opacity: 0.5;
+  font-size: 12px;
+}
+.cell-result-mfr {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #81c784;
+}
+.cell-result-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.cell-result-field {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.cell-field-wide {
+  grid-column: 1 / -1;
+}
+.cell-field-label {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+}
+.cell-field-value {
+  font-size: 13px;
+  color: #fff;
+  word-break: break-all;
+}
+.cell-result-cell {
+  background: rgba(129, 199, 132, 0.08);
+  border: 1px solid rgba(129, 199, 132, 0.15);
+  border-radius: 6px;
+  padding: 8px;
+  margin-top: 6px;
+}
+.cell-cell-title {
+  font-size: 10px;
+  color: rgba(129, 199, 132, 0.7);
+  margin-bottom: 4px;
+}
+.cell-result-map {
+  margin-top: 6px;
+}
+.cell-map-link {
+  font-size: 11px;
+  color: #4fc3f7;
+  text-decoration: none;
+}
+.cell-map-link:hover {
+  text-decoration: underline;
+}
+.cell-more-hint {
+  text-align: center;
+  padding: 4px;
+  opacity: 0.4;
+  font-size: 11px;
+}
+.cell-empty {
+  text-align: center;
+  padding: 20px;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 13px;
+}
+
+@media (max-width: 760px) {
+  .cell-device-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .cell-query-tabs {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .cell-query-tabs .el-button-group {
+    flex-wrap: nowrap;
+  }
+}
+
+@media (max-width: 560px) {
+  .cell-device-grid {
+    grid-template-columns: 1fr;
+  }
+  .cell-query-input {
+    flex-direction: column;
+  }
+  .cell-query-input .el-input {
+    width: 100%;
   }
 }
 

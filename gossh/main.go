@@ -922,6 +922,14 @@ func main() {
 		auth.POST("/api/system/hosts/reload-dns", service.HostsReloadDnsmasqHandler)
 	}
 
+	{ // 小区基站查询
+		auth.GET("/api/system/cell-lookup/status", service.CellLookupGetStatusHandler)
+		auth.GET("/api/system/cell-lookup/data", service.CellLookupGetDataHandler)
+		auth.POST("/api/system/cell-lookup/upload", service.CellLookupUploadHandler)
+		auth.POST("/api/system/cell-lookup/uninstall", service.CellLookupUninstallHandler)
+		auth.GET("/api/system/cell-lookup/device-info", service.CellLookupDeviceInfoHandler)
+	}
+
 	{ // SSH 连接配置
 		auth.GET("/api/conn_conf", service.ConfFindAll)
 		auth.GET("/api/conn_conf/:id", service.ConfFindByID)

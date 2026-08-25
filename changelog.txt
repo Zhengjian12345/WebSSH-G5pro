@@ -1,0 +1,81 @@
+## 20260825_215046
+
+构建时间: 2026-08-25 21:50:46
+
+### 与上一版本（latest-data）相比
+
+- fix: 小区参数获取改用 encoding/json + 前端回退机制 (bc86a47) <Zhengjian12345>
+- fix: G5 Pro 小区参数获取改用 ubus API (9a7426a) <Zhengjian12345>
+- fix: 移除Content-Encoding头避免浏览器透明解压导致fetch失败 (fc32fbc) <Zhengjian12345>
+- fix: 小区查询数据加载401错误，fetch请求补充认证token (0c21b25) <Zhengjian12345>
+- refactor: 小区查询复用连点5次密码框机制解锁 (26f9434) <Zhengjian12345>
+- feat: 集成小区基站查询功能（uu60隐藏解锁） (e206a7c) <Zhengjian12345>
+- fix: Hosts管理按钮移动端自适应换行，修复文字重叠 (178494c) <Zhengjian12345>
+- fix: 移除 hosts_manager.go 中重复的 copyFile 函数 (581c0a9) <GitHub Actions>
+- feat: 集成 Hosts 管理功能到系统工具 (f062168) <GitHub Actions>
+- feat: 同步上游功能-飞行模式+关机+V6防污染+mihomo流式日志+自动滚动+iOS PWA (a60c805) <GitHub Actions>
+- fix: 企微Webhook改用text类型-markdown在个人微信中不支持 (5a8d4f3) <GitHub Actions>
+- feat: 短信转发增加企业微信Webhook和Plus Push推送渠道 (2302708) <GitHub Actions>
+- feat: frpc安装进度条+SSE实时进度+mihomo代理下载+gh-proxy备用 (ea1824b) <GitHub Actions>
+- fix: time.Sleep缺少括号导致语法错误 (570d0cc) <GitHub Actions>
+- feat: Tailscale安装进度条+SSE实时进度+mihomo代理下载+gh-proxy备用线路 (440d1db) <GitHub Actions>
+- fix: 编译错误-frpc.go cmd变量作用域+tailscale.go void函数返回值误用 (06087bd) <GitHub Actions>
+- feat: Tailscale检查更新-后端API(版本对比/安装/更新/卸载)+前端(版本信息/检查更新按钮/更新按钮/自动检测) (a6cb3e3) <GitHub Actions>
+- fix: frpc安装-前端缺少action参数导致后端报错+卸载按钮调错接口+下载添加gh-proxy加速 (dc26ea1) <GitHub Actions>
+- ci: push到master分支时自动触发构建工作流 (d3a268a) <GitHub Actions>
+- fix: 修复frpc.go编译错误-proc.Terminate不存在，改用kill -TERM命令 (80afa6c) <GitHub Actions>
+- feat: 深度集成frpc内网穿透-后端API(状态/控制/代理CRUD/配置/安装/自启动)+前端管理面板 (be48d35) <GitHub Actions>
+- feat: 启用短信转发功能，同步上游改进(批量合并等待/标记已读/BarkGroup) (8778038) <GitHub Actions>
+- fix: SIM切卡-先调用zwrt_mdm_uci_set设置pin_no_need_decode=1再传PIN明文(飞猫APP同款流程)，失败时降级AES加密 (3a036da) <GitHub Actions>
+- fix: MLO状态从wifiStatus轮询数据读取(而非uci get)，切卡密钥搜索改为grep -oE+strings+Hex.parse模式匹配 (1bc3b95) <GitHub Actions>
+- fix: SIM切卡-正确AES格式(IV+密文拼接),遍历候选密钥尝试,详细日志输出每步结果 (fb15e4c) <GitHub Actions>
+- fix: SIM切卡-从设备JS提取AES密钥加密PIN后调用ubus sim_change_pin_mode，失败时尝试多种ubus AT方法 (beb7341) <GitHub Actions>
+- feat: WiFi设置显示高级选项(性能/功率/国家码)，新增MLO/Band Steering/波束成形开关(ubus接口) (66074dd) <GitHub Actions>
+- refactor: SIM切卡改用ubus sim_change_pin_mode启用PIN锁方式（与官方后台一致），删除AT串口代码 (907e783) <GitHub Actions>
+- fix: SIM切卡-运营商中文名映射(CMCC->中国移动)、扩展AT端口扫描(tty/smd/at全扫)、AT失败时输出设备列表 (41d95b4) <GitHub Actions>
+- feat: SIM切卡状态检测改用ubus接口（zwrt_zte_mdm.api get_sim_info），显示运营商/ICCID/PIN状态，goform降级 (9dd118a) <GitHub Actions>
+- fix: Tailscale自启动用临时文件+head/tail拼接插入rc.local，彻底避免shell特殊字符问题 (4e2e39a) <GitHub Actions>
+- revert: Tailscale自启动改回前端rc.local方案（纯前端实现，单行sed精准删除避免残留） (a8241b8) <GitHub Actions>
+- refactor: Tailscale自启动改用标记文件机制（模仿Mihomo），后端API管理，清理rc.local残留 (f996d37) <GitHub Actions>
+- fix: Tailscale自启动在exit 0之前插入，添加网络等待和TUN设备创建 (55b21b3) <GitHub Actions>
+- fix: 切换到Tailscale/SIM切卡标签页时自动刷新状态，避免显示未安装/旧数据 (062cbdf) <GitHub Actions>
+- feat: Tailscale 添加开机自启动开关（通过 /etc/rc.local 管理） (7c1100c) <GitHub Actions>
+- fix: Tailscale 卸载按钮使用独立 tsUninstalling loading，避免点击启动时卸载按钮也转圈 (4243df8) <GitHub Actions>
+- fix: refreshTsStatus 添加 pgrep 兜底检测，PID文件缺失时仍可识别进程存活 (77a4cb2) <GitHub Actions>
+- fix: Tailscale 启动改用文件脚本避免shell引号嵌套，PID文件管理进程，登录流程重写 (1f96284) <GitHub Actions>
+- fix: Tailscale启动改用setsid+nohup双重保险，添加/dev/net/tun检查和进程存活验证 (c14ead0) <GitHub Actions>
+- refactor: Tailscale和SIM切卡移入系统工具弹窗（作为标签页） (43b055f) <GitHub Actions>
+- fix: 构建脚本改用 GITHUB_TOKEN（PERSONAL_TOKEN 已过期） (1091146) <GitHub Actions>
+- feat: 添加飞猫分身卡 SIM 切卡功能（移动/联通/电信+AT指令+自动校准时间） (7f620fd) <GitHub Actions>
+- feat: 添加 Tailscale VPN 管理功能（安装/启动/登录/子网路由） (041b17f) <GitHub Actions>
+- perf: 刷新间隔3s/10s、fetchAllData竞态保护、DbCheck 5秒缓存 (a39e831) <GitHub Actions>
+- fix: SSH优雅停止、配置读写锁、前端资源泄漏、token null检查 (a8f2011) <GitHub Actions>
+- security: 修复多个安全问题（配置权限、JWT安全、WebSocket CORS、RSA密钥、审计密码） (88dbe8e) <GitHub Actions>
+- feat: 启动时自动检测系统时间偏差并校正（等待网络就绪后执行） (563418d) <GitHub Actions>
+- style: 修复时间弹窗改为深色毛玻璃风格，与整体UI协调 (a3bf879) <GitHub Actions>
+- fix: 修复修复时间功能shell脚本引号转义错误导致syntax error (500ee18) <GitHub Actions>
+- fix: 添加缺失的 os/exec import 修复构建失败 (5bf67d5) <GitHub Actions>
+- feat: 添加修复系统时间功能（从HTTP Date头获取真实UTC校正时钟+时区） (93aee19) <GitHub Actions>
+- fix: 暂时隐藏温控开关，待确认正确参数后再启用 (7d46dca) <GitHub Actions>
+- fix: 温控set_policy使用正确参数(name:19, action:0/1)替代错误的current_policy (96350ee) <GitHub Actions>
+- fix: 温控设置后读取确认是否生效，显示实际值便于调试 (638c40a) <GitHub Actions>
+- fix: 修复温控开关section标签位置错误导致构建失败 (fbc5d79) <GitHub Actions>
+- fix: 编辑连接时如果密码为空则保留原密码，避免BeforeUpdate双重加密导致连接失败 (b64381b) <GitHub Actions>
+- fix: 修复温控策略API字段名(current_policy)和值(0/1) (cd2f68c) <GitHub Actions>
+- feat: WiFi设置中添加温控策略开关(通过zwrt_bsp.thermal set_policy/get_policy) (d995ddf) <GitHub Actions>
+- feat: 温度趋势添加平均值和最低值显示 (31de859) <GitHub Actions>
+- debug: 添加divisor调试信息到API响应 (f5bf153) <GitHub Actions>
+- fix: 2.4G/5G使用不同速率换算因子，修改提示文案，U60Pro改为G5 Pro (e811099) <GitHub Actions>
+- fix: formatRate直接显示Mbps值不再除以1000，修复速率显示为2Mbps的问题 (359ec7f) <GitHub Actions>
+- fix: 使用hostapd get_clients获取信号(准确)+速率(近似值/2600)，修改提示文案 (8679c72) <GitHub Actions>
+- fix: 使用ubus call iwinfo assoclist获取信号和速率，rate单位100kbps转Mbps (ec3dff5) <GitHub Actions>
+- fix: 改用iw dev station dump获取速率(G5Pro上iwinfo assoclist不可用) (da5707b) <GitHub Actions>
+- fix: 使用iwinfo assoclist获取速率(MBit/s)和信号，替代hostapd的不准确rate字段 (eabf8d2) <GitHub Actions>
+- fix: hostapd rate.tx单位是Mbps，移除错误的除法换算 (224069c) <GitHub Actions>
+- fix: 修复hostapd数据解析，使用rate.tx字段并适配2.4G/5G不同单位 (6f83859) <GitHub Actions>
+- fix: 恢复0.03版本的WifiClientsGetHandler，使用hostapd.get_clients获取信号和速率 (eef6f6e) <GitHub Actions>
+- fix: 优化温度趋势图表横轴时间显示为相对时间(0s, 60s, 1m等) (1f13ec3) <GitHub Actions>
+- fix: 恢复ubus batch方式获取无线速率，适配G5Pro接口名ra0/rai0 (317af9b) <GitHub Actions>
+- fix: 修复wifi/clients API返回格式，匹配前端期望的按接口分组格式 (908e08c) <GitHub Actions>
+- fix: 恢复G5Pro格式AMBR/QCI解析，恢复/api/wifi/clients获取无线速率 (2d999c0) <GitHub Actions>
+- fix: G5Pro适配 - 修复key.log路径为/logfs/key.log，前端WiFi接口名改为ra0/rai0 (564c515) <GitHub Actions>

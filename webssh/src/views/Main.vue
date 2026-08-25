@@ -2915,7 +2915,7 @@ const hosts = reactive({
   status: '',
 });
 
-// ── 小区基站查询（隐藏功能，输入 uu60 解锁）──
+// ── 小区基站查询（隐藏功能，连点运行时间5次解锁）──
 const cellLookupUnlocked = ref(false);
 const cellLookup = reactive({
   loading: false,
@@ -3456,30 +3456,10 @@ function resetHostsSkeleton() {
 }
 
 // ══════════════════════════════════════════
-// 小区基站查询（uu60 隐藏功能）
+// 小区基站查询（连点运行时间5次解锁）
 // ══════════════════════════════════════════
 const MFR_LIST = ['华为', '诺基亚', '未知', '中兴'];
 const NET_TYPE_LIST = ['SA', 'NSA', 'LTE', 'TDD', 'FDD'];
-
-// ── uu60 按键序列检测 ──
-let _uu60Buffer = '';
-function handleUu60Keydown(e: KeyboardEvent) {
-  if (!systemToolsDialogVisible.value) return;
-  // 只处理可见字符
-  if (e.key.length !== 1) return;
-  _uu60Buffer += e.key.toLowerCase();
-  if (_uu60Buffer.length > 4) _uu60Buffer = _uu60Buffer.slice(-4);
-  if (_uu60Buffer === 'uu60') {
-    cellLookupUnlocked.value = true;
-    ElMessage.success('小区查询功能已解锁');
-    // 自动切换到该标签
-    nextTick(() => {
-      systemToolsActiveTab.value = 'cell';
-      loadCellLookupData();
-    });
-    _uu60Buffer = '';
-  }
-}
 
 // ── 解析数据 ──
 function parseCellData(text: string) {
@@ -6275,11 +6255,16 @@ function setCookieValue(name: string, value: string, maxAgeSeconds: number) {
 
 function initMmEntryState() {
   mmEntryUnlocked.value = getCookieValue(mmGate.cookie) === '1'
+  cellLookupUnlocked.value = mmEntryUnlocked.value
   if (mmEntryUnlocked.value) loadMmStatus()
 }
 
 async function handleUptimeSecretClick() {
-  if (mmEntryUnlocked.value) return
+  if (mmEntryUnlocked.value) {
+    // 已解锁，同时切换到小区查询
+    cellLookupUnlocked.value = true
+    return
+  }
   mmGateClickCount += 1
   if (mmGateClickTimer) clearTimeout(mmGateClickTimer)
   mmGateClickTimer = setTimeout(() => {
@@ -6308,6 +6293,7 @@ async function handleUptimeSecretClick() {
       return
     }
     mmEntryUnlocked.value = true
+    cellLookupUnlocked.value = true
     setCookieValue(mmGate.cookie, '1', 180 * 24 * 60 * 60)
     loadMmStatus()
     ElMessage.success('你发现了秘密通道！')
@@ -7315,8 +7301,6 @@ onMounted(() => {
   netAmbrGetHandler();
   // G5Pro: 直接加载 Mihomo 状态（彩蛋已解锁）
   loadMmStatus();
-  // 小区查询: uu60 按键序列监听
-  window.addEventListener('keydown', handleUu60Keydown);
 });
 
 onUnmounted(() => {
@@ -7329,8 +7313,6 @@ onUnmounted(() => {
     clearTimeout(mmGateClickTimer);
     mmGateClickTimer = null;
   }
-  // 小区查询: 移除按键监听
-  window.removeEventListener('keydown', handleUu60Keydown);
   // 兜底还原（防止组件卸载时仍残留锁定样式）
   const body = document.body;
   body.style.position = '';

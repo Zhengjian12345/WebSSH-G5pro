@@ -3497,8 +3497,10 @@ async function loadCellLookupData() {
       return;
     }
     cellLookup.status = `数据文件: ${d.size_text}，正在加载...`;
-    // 获取 gz 文件
-    const resp = await fetch('/api/system/cell-lookup/data');
+    // 获取 gz 文件（需要带认证 token）
+    const resp = await fetch('/api/system/cell-lookup/data', {
+      headers: { Authorization: localStorage.getItem('token') ?? '' },
+    });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const buf = await resp.arrayBuffer();
     // DecompressionStream 解压

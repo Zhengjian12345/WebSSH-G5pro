@@ -3665,20 +3665,38 @@ async function doCellAutoLookup() {
   cellLookup._statCount = '获取设备参数中...';
   try {
     // G5 Pro 通过 ubus (zte_nwinfo_api) 获取小区参数，与 U60 Pro 的 goform API 不同
-    // 数据已在 doFetchAllData 的 ubus 批量请求中获取，直接使用 d.value
-    const dv = d.value || {};
-    const nt = String(dv.network_type || '').toUpperCase();
-    const is5G = nt.includes('NR') || nt.includes('5G') || nt.includes('SA') || nt.includes('NSA') || nt.includes('ENDC');
+    // 优先使用已加载的 d.value（ubus 批量请求结果），如果关键字段为空则回退到后端 API
+    let info: any = null;
 
-    const info = {
-      net_type: dv.network_type || '',
-      operator: netWorkProvider.value || dv.network_provider || '',
-      pci: is5G ? (dv.nr5g_pci || '') : (dv.lte_pci || ''),
-      earfcn: is5G ? (dv.nr5g_action_channel || '') : (dv.lte_action_channel || ''),
-      cell_id: is5G ? (dv.nr5g_cell_id || '') : (dv.cell_id || ''),
-      rsrp: is5G ? (dv.nr5g_rsrp || '') : (dv.lte_rsrp || ''),
-      is_5g: is5G,
-    };
+    const dv = d.value || {};
+    if (dv.network_type) {
+      // 主页面数据已加载，直接使用
+      const nt = String(dv.network_type || '').toUpperCase();
+      const is5G = nt.includes('NR') || nt.includes('5G') || nt.includes('SA') || nt.includes('NSA') || nt.includes('ENDC');
+      info = {
+        net_type: dv.network_type || '',
+        operator: netWorkProvider.value || dv.network_provider || '',
+        pci: String(is5G ? (dv.nr5g_pci ?? '') : (dv.lte_pci ?? '')),
+        earfcn: String(is5G ? (dv.nr5g_action_channel ?? '') : (dv.lte_action_channel ?? '')),
+        cell_id: String(is5G ? (dv.nr5g_cell_id ?? '') : (dv.cell_id ?? '')),
+        rsrp: String(is5G ? (dv.nr5g_rsrp ?? '') : (dv.lte_rsrp ?? '')),
+        is_5g: is5G,
+      };
+    }
+
+    // 如果 d.value 没有数据，回退到后端 API（后端使用 ubus 获取）
+    if (!info || !info.pci) {
+      try {
+        const res = await axios.get('/api/system/cell-lookup/device-info');
+        if (res.data.code === 0 && res.data.data) {
+          info = res.data.data;
+        }
+      } catch (e2) {
+        // 后端 API 也失败，继续用空 info
+      }
+    }
+
+    if (!info) info = { net_type: '', operator: '', pci: '', earfcn: '', cell_id: '', rsrp: '', is_5g: false };
     cellLookup.deviceInfo = info;
     let res2: any[] = [];
     if (info.cell_id) res2 = lookupCellID(info.cell_id);

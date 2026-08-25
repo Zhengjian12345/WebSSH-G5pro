@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"gossh/gin"
 	"os"
@@ -103,43 +104,74 @@ func CellLookupDeviceInfoHandler(c *gin.Context) {
 		"ubus call zte_nwinfo_api nwinfo_get_netinfo 2>/dev/null").CombinedOutput()
 	if err != nil {
 		info.RawError = "ubus 调用失败: " + err.Error()
-		c.JSON(200, gin.H{"code": 1, "msg": info.RawError})
+		c.JSON(200, gin.H{"code": 1, "msg": info.RawError, "data": info})
 		return
 	}
 
 	raw := strings.TrimSpace(string(out))
 	if raw == "" {
 		info.RawError = "设备返回为空"
-		c.JSON(200, gin.H{"code": 1, "msg": info.RawError})
+		c.JSON(200, gin.H{"code": 1, "msg": info.RawError, "data": info})
 		return
 	}
 
-	// ubus 返回标准 JSON，直接解析
-	data := parseGoformOutput(raw)
-	nt := getStr(data, "network_type")
-	info.NetType = nt
-	info.Operator = getStr(data, "network_provider")
+	// 使用 encoding/json 正确解析 ubus 返回的标准 JSON
+	var ubusData map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &ubusData); err != nil {
+		info.RawError = "JSON 解析失败: " + err.Error() + ", raw: " + raw
+		c.JSON(200, gin.H{"code": 1, "msg": info.RawError, "data": info})
+		return
+	}
 
-	is5G := strings.Contains(strings.ToUpper(nt), "NR") ||
-		strings.Contains(strings.ToUpper(nt), "5G") ||
-		strings.Contains(strings.ToUpper(nt), "SA") ||
-		strings.Contains(strings.ToUpper(nt), "NSA") ||
-		strings.Contains(strings.ToUpper(nt), "ENDC")
+	nt := toStr(ubusData["network_type"])
+	info.NetType = nt
+	info.Operator = toStr(ubusData["network_provider"])
+
+	ntUp := strings.ToUpper(nt)
+	is5G := strings.Contains(ntUp, "NR") ||
+		strings.Contains(ntUp, "5G") ||
+		strings.Contains(ntUp, "SA") ||
+		strings.Contains(ntUp, "NSA") ||
+		strings.Contains(ntUp, "ENDC")
 	info.Is5G = is5G
 
 	if is5G {
-		info.PCI = getStr(data, "nr5g_pci")
-		info.EARFCN = getStr(data, "nr5g_action_channel")
-		info.CellID = getStr(data, "nr5g_cell_id")
-		info.RSRP = getStr(data, "nr5g_rsrp")
+		info.PCI = toStr(ubusData["nr5g_pci"])
+		info.EARFCN = toStr(ubusData["nr5g_action_channel"])
+		info.CellID = toStr(ubusData["nr5g_cell_id"])
+		info.RSRP = toStr(ubusData["nr5g_rsrp"])
 	} else {
-		info.PCI = getStr(data, "lte_pci")
-		info.EARFCN = getStr(data, "lte_action_channel")
-		info.CellID = getStr(data, "cell_id")
-		info.RSRP = getStr(data, "lte_rsrp")
+		info.PCI = toStr(ubusData["lte_pci"])
+		info.EARFCN = toStr(ubusData["lte_action_channel"])
+		info.CellID = toStr(ubusData["cell_id"])
+		info.RSRP = toStr(ubusData["lte_rsrp"])
 	}
 
 	c.JSON(200, gin.H{"code": 0, "data": info})
+}
+
+// toStr 将 interface{} 转为 string
+func toStr(v interface{}) string {
+	if v == nil {
+		return ""
+	}
+	switch val := v.(type) {
+	case string:
+		return val
+	case float64:
+		// JSON 数字解析为 float64，整数去掉小数
+		if val == float64(int64(val)) {
+			return fmt.Sprintf("%d", int64(val))
+		}
+		return fmt.Sprintf("%v", val)
+	case bool:
+		if val {
+			return "true"
+		}
+		return "false"
+	default:
+		return fmt.Sprintf("%v", v)
+	}
 }
 
 func formatFileSize(b int64) string {
@@ -150,38 +182,4 @@ func formatFileSize(b int64) string {
 		return fmt.Sprintf("%.1fKB", float64(b)/1024)
 	}
 	return fmt.Sprintf("%.1fMB", float64(b)/1048576)
-}
-
-func parseGoformOutput(raw string) map[string]string {
-	data := map[string]string{}
-	// 尝试 JSON
-	if strings.HasPrefix(raw, "{") {
-		// 简单 JSON 解析，避免引入额外依赖
-		lines := strings.Split(raw, ",")
-		for _, line := range lines {
-			line = strings.Trim(line, "{}\"")
-			parts := strings.SplitN(line, ":", 2)
-			if len(parts) == 2 {
-				k := strings.Trim(parts[0], "\" ")
-				v := strings.Trim(parts[1], "\" ")
-				data[k] = v
-			}
-		}
-		return data
-	}
-	// key=value 格式
-	for _, line := range strings.Split(raw, "\n") {
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) == 2 {
-			data[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
-		}
-	}
-	return data
-}
-
-func getStr(m map[string]string, key string) string {
-	if v, ok := m[key]; ok {
-		return v
-	}
-	return ""
 }

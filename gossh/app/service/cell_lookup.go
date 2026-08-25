@@ -94,16 +94,15 @@ func CellLookupUninstallHandler(c *gin.Context) {
 }
 
 // CellLookupDeviceInfoHandler GET /api/system/cell-lookup/device-info
-// 通过设备本地 goform API 获取当前小区参数
+// G5 Pro 通过 ubus (zte_nwinfo_api) 获取当前小区参数，与 U60 Pro 的 goform API 不同
 func CellLookupDeviceInfoHandler(c *gin.Context) {
 	info := CellLookupDeviceInfo{}
-	cmd := "network_type,network_provider,Lte_pci,Lte_fcn,Lte_cell_id,Nr_pci,Nr_fcn,Nr_cell_id,lte_rsrp,Z5g_rsrp"
-	url := fmt.Sprintf("http://127.0.0.1/api/goform/goform_get_cmd_process?isTest=false&cmd=%s", cmd)
 
+	// G5 Pro: ubus call zte_nwinfo_api nwinfo_get_netinfo
 	out, err := exec.Command("sh", "-c",
-		fmt.Sprintf("curl -s '%s' 2>/dev/null", url)).CombinedOutput()
+		"ubus call zte_nwinfo_api nwinfo_get_netinfo 2>/dev/null").CombinedOutput()
 	if err != nil {
-		info.RawError = "curl 失败: " + err.Error()
+		info.RawError = "ubus 调用失败: " + err.Error()
 		c.JSON(200, gin.H{"code": 1, "msg": info.RawError})
 		return
 	}
@@ -115,24 +114,28 @@ func CellLookupDeviceInfoHandler(c *gin.Context) {
 		return
 	}
 
-	// 尝试 JSON 解析
+	// ubus 返回标准 JSON，直接解析
 	data := parseGoformOutput(raw)
 	nt := getStr(data, "network_type")
 	info.NetType = nt
 	info.Operator = getStr(data, "network_provider")
 
-	is5G := strings.Contains(strings.ToUpper(nt), "5G") || nt == "16" || nt == "17" || nt == "19" || nt == "21"
+	is5G := strings.Contains(strings.ToUpper(nt), "NR") ||
+		strings.Contains(strings.ToUpper(nt), "5G") ||
+		strings.Contains(strings.ToUpper(nt), "SA") ||
+		strings.Contains(strings.ToUpper(nt), "NSA") ||
+		strings.Contains(strings.ToUpper(nt), "ENDC")
 	info.Is5G = is5G
 
 	if is5G {
-		info.PCI = getStr(data, "Nr_pci")
-		info.EARFCN = getStr(data, "Nr_fcn")
-		info.CellID = getStr(data, "Nr_cell_id")
-		info.RSRP = getStr(data, "Z5g_rsrp")
+		info.PCI = getStr(data, "nr5g_pci")
+		info.EARFCN = getStr(data, "nr5g_action_channel")
+		info.CellID = getStr(data, "nr5g_cell_id")
+		info.RSRP = getStr(data, "nr5g_rsrp")
 	} else {
-		info.PCI = getStr(data, "Lte_pci")
-		info.EARFCN = getStr(data, "Lte_fcn")
-		info.CellID = getStr(data, "Lte_cell_id")
+		info.PCI = getStr(data, "lte_pci")
+		info.EARFCN = getStr(data, "lte_action_channel")
+		info.CellID = getStr(data, "cell_id")
 		info.RSRP = getStr(data, "lte_rsrp")
 	}
 

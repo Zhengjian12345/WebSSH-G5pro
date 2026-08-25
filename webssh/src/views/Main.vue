@@ -3664,9 +3664,21 @@ async function doCellAutoLookup() {
   cellLookup.deviceInfo = null;
   cellLookup._statCount = '获取设备参数中...';
   try {
-    const res = await axios.get('/api/system/cell-lookup/device-info');
-    if (res.data.code !== 0) throw new Error(res.data.msg || '获取失败');
-    const info = res.data.data;
+    // G5 Pro 通过 ubus (zte_nwinfo_api) 获取小区参数，与 U60 Pro 的 goform API 不同
+    // 数据已在 doFetchAllData 的 ubus 批量请求中获取，直接使用 d.value
+    const dv = d.value || {};
+    const nt = String(dv.network_type || '').toUpperCase();
+    const is5G = nt.includes('NR') || nt.includes('5G') || nt.includes('SA') || nt.includes('NSA') || nt.includes('ENDC');
+
+    const info = {
+      net_type: dv.network_type || '',
+      operator: netWorkProvider.value || dv.network_provider || '',
+      pci: is5G ? (dv.nr5g_pci || '') : (dv.lte_pci || ''),
+      earfcn: is5G ? (dv.nr5g_action_channel || '') : (dv.lte_action_channel || ''),
+      cell_id: is5G ? (dv.nr5g_cell_id || '') : (dv.cell_id || ''),
+      rsrp: is5G ? (dv.nr5g_rsrp || '') : (dv.lte_rsrp || ''),
+      is_5g: is5G,
+    };
     cellLookup.deviceInfo = info;
     let res2: any[] = [];
     if (info.cell_id) res2 = lookupCellID(info.cell_id);
